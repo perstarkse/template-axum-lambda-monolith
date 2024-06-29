@@ -1,0 +1,4 @@
+.aws-sam
+.direnv
+rust_app/target
+events
