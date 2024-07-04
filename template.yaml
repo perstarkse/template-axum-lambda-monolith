@@ -27,7 +27,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      CodeUri: ./rust_app/  # Assumes your Cargo.toml is in the root directory
+      CodeUri: ./rust_app/
       Handler: bootstrap
       Runtime: provided.al2023
       Architectures:
