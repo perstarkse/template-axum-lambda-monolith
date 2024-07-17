@@ -1,103 +1,51 @@
-use axum::{
-    http::{Request, StatusCode},
-    middleware::Next,
-    response::Response,
-    extract::State,
-};
-use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use jsonwebtokens_cognito::{KeySet, Error as JwtError};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use reqwest;
-use serde_json::Value;
-use std::time::{Duration, Instant};
-use crate::config::Config;
+/// TODO
+/// Implement caching, look at the jsonwebtokens_cognito crate
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    exp: usize,
-    // Add other claims as needed
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Claims {
+    pub sub: String,
+    pub email: String,
+    pub exp: usize,
 }
 
-struct CachedKey {
-    key: DecodingKey,
-    expiry: Instant,
+pub struct Auth {
+    keyset: KeySet,
 }
 
-pub struct AuthState {
-    config: Config,
-    cached_key: RwLock<Option<CachedKey>>,
+#[derive(Debug)]
+pub enum AuthError {
+    JwtError(JwtError),
+    ParsingError(serde_json::Error),
 }
 
-impl AuthState {
-    pub fn new(config: Config) -> Self {
-        Self {
-            config,
-            cached_key: RwLock::new(None),
-        }
-    }
-
-    async fn get_decoding_key(&self) -> Result<DecodingKey, reqwest::Error> {
-        let mut cached_key = self.cached_key.write().await;
-        
-        if let Some(ref key) = *cached_key {
-            if key.expiry > Instant::now() {
-                return Ok(key.key.clone());
-            }
-        }
-
-        let new_key = self.fetch_cognito_public_key().await?;
-        *cached_key = Some(CachedKey {
-            key: new_key.clone(),
-            expiry: Instant::now() + Duration::from_secs(3600), // Cache for 1 hour
-        });
-
-        Ok(new_key)
-    }
-
-    async fn fetch_cognito_public_key(&self) -> Result<DecodingKey, reqwest::Error> {
-        let jwks_url = format!(
-            "https://cognito-idp.{}.amazonaws.com/{}/.well-known/jwks.json",
-            self.config.aws_region, self.config.cognito_user_pool_id
-        );
-        let resp: Value = reqwest::get(&jwks_url).await?.json().await?;
-        
-        // Extract the public key from the JWKS response
-        // This is a simplified example; you should handle multiple keys and key rotation
-        let n = resp["keys"][0]["n"].as_str().unwrap();
-        let e = resp["keys"][0]["e"].as_str().unwrap();
-        
-        Ok(DecodingKey::from_rsa_components(n, e))
+impl From<JwtError> for AuthError {
+    fn from(err: JwtError) -> Self {
+        AuthError::JwtError(err)
     }
 }
 
-pub async fn auth_middleware<B>(
-    State(state): State<Arc<AuthState>>,
-    req: Request<B>,
-    next: Next<>,
-) -> Result<Response, StatusCode> {
-    let token = req
-        .headers()
-        .get("Authorization")
-        .and_then(|header| header.to_str().ok())
-        .and_then(|header| header.strip_prefix("Bearer "))
-        .ok_or(StatusCode::UNAUTHORIZED)?;
+impl From<serde_json::Error> for AuthError {
+    fn from(err: serde_json::Error) -> Self {
+        AuthError::ParsingError(err)
+    }
+}
 
-    let decoding_key = state.get_decoding_key().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+impl Auth {
+    pub fn new(region: &str, user_pool_id: &str) -> Result<Self, JwtError> {
+        let keyset = KeySet::new(region, user_pool_id)?;
+        Ok(Self { keyset })
+    }
 
-    let mut validation = Validation::new(Algorithm::RS256);
-    validation.set_audience(&[&state.config.cognito_app_client_id]);
-    validation.set_issuer(&[&format!("https://cognito-idp.{}.amazonaws.com/{}", 
-                                     state.config.aws_region, 
-                                     state.config.cognito_user_pool_id)]);
-
-    match decode::<Claims>(token, &decoding_key, &validation) {
-        Ok(token_data) => {
-            // You can add the claims to the request extensions if needed
-            req.extensions_mut().insert(token_data.claims);
-            Ok(next.run(req).await)
-        }
-        Err(_) => Err(StatusCode::UNAUTHORIZED),
+    pub async fn verify_token(&self, token: &str, client_id: &str) -> Result<Claims, AuthError> {        
+        let verifier = self.keyset.new_id_token_verifier(&[client_id]).build().map_err(|e| AuthError::JwtError(e.into()))?;
+        
+        let claims = self.keyset.verify(token, &verifier).await?;
+        
+        // Parse the claims into our Claims struct
+        let claims: Claims = serde_json::from_value(claims)?;
+        
+        Ok(claims)
     }
 }
