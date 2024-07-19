@@ -29,6 +29,7 @@ pub trait DynamoDbTrait {
     async fn create(&self, item: CreateItem) -> Result<String>;
     async fn update(&self, item: Item) -> Result<()>;
     async fn delete(&self, id: &str) -> Result<()>;
+    async fn scan(&self) -> Result<Vec<Item>>; 
 }
 
 #[derive(Clone)]
@@ -55,6 +56,33 @@ impl DynamoDb {
 
 #[async_trait]
 impl DynamoDbTrait for DynamoDb {
+    async fn scan(&self) -> Result<Vec<Item>> {
+        let mut items = Vec::new();
+        let mut last_evaluated_key = None;
+
+        loop {
+            let mut scan_output = self.client
+                .scan()
+                .table_name(&self.table_name)
+                .set_exclusive_start_key(last_evaluated_key)
+                .send()
+                .await?;
+
+            if let Some(scanned_items) = scan_output.items {
+                for item in scanned_items {
+                    items.push(from_item(item)?);
+                }
+            }
+
+            last_evaluated_key = scan_output.last_evaluated_key.take();
+
+            if last_evaluated_key.is_none() {
+                break;
+            }
+        }
+
+        Ok(items)
+    }
     async fn get_item(&self, id: &str) -> Result<Option<Item>> {
         let key = HashMap::from([
             ("id".to_string(), AttributeValue::S(id.to_string())),
@@ -84,8 +112,6 @@ impl DynamoDbTrait for DynamoDb {
         };
         let dynamo_item = to_item(item)?;
 
-        println!("created item");
-        
         self.client
             .put_item()
             .table_name(&self.table_name)
@@ -131,6 +157,30 @@ impl DynamoDbTrait for DynamoDb {
 mod tests {
     use super::*;
     use mockall::predicate::*;
+    
+    #[tokio::test]
+    async fn test_scan() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_scan()
+            .times(1)
+            .returning(|| Ok(vec![
+                Item {
+                    id: "id1".to_string(),
+                    name: "Name 1".to_string(),
+                    age: 30,
+                },
+                Item {
+                    id: "id2".to_string(),
+                    name: "Name 2".to_string(),
+                    age: 40,
+                },
+            ]));
+
+        let result = mock.scan().await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].id, "id1");
+        assert_eq!(result[1].id, "id2");
+    }
 
     #[tokio::test]
     async fn test_get_item() {

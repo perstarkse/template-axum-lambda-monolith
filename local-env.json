@@ -1,0 +1,8 @@
+{
+  "NxtpollApiFunction": {
+    "ENVIRONMENT": "development",
+    "TEST_TABLE_NAME": "nxtpoll-api-TestTable-3YN7OM59HARI",
+    "AWS_REGION": "us-east-1"
+  }
+}
+

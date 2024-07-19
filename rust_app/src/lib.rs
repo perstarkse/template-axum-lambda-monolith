@@ -4,7 +4,7 @@ pub mod error;
 pub mod routes;
 pub mod db;
 
-use axum::{Router, Extension, routing::get, routing::post };
+use axum::{Router, Extension, routing::get};
 use lambda_http::{run, tracing, Error};
 // use tracing_subscriber::field::MakeOutput;
 use crate::routes::{root, foo, parameters, health};
@@ -13,20 +13,20 @@ use crate::db::DynamoDb;
 // use crate::auth::{auth_middleware, AuthState};
 // use std::sync::Arc;
 
-pub async fn create_app(_config: Config) -> Router {
+pub async fn create_app(config: Config) -> Router {
     // let auth_state = Arc::new(AuthState::new(config));
-    println!("Initializing DynamoDB client");
-    // let db = DynamoDb::new(config.dynamodb_table_name.to_string())
-    let db = DynamoDb::new("nxtpoll-api-TestTable-3YN7OM59HARI".to_string())
+
+    println!("{}",&config.dynamodb_table_name);
+
+    let db = DynamoDb::new(config.dynamodb_table_name)
         .await
         .expect("Failed to initialize DynamoDB client");
-
-    println!("Creating router");
+    
 
     Router::new()
         .route("/", get(root::handler))
         .route("/foo", get(foo::get).post(foo::post))
-        .route("/foo/:name", post(foo::post_with_name))
+        .route("/foo/:id", get(foo::get_by_id).post(foo::update).delete(foo::delete)) 
         .route("/parameters", get(parameters::handler))
         .route("/health", get(health::check))
         .layer(Extension(db))
