@@ -9,7 +9,7 @@ edition = "2021"
 anyhow = "1.0.86"
 async-trait = "0.1.81"
 aws-config = "1.5.4"
-aws-sdk-dynamodb = "1.38.0"
+aws-sdk-dynamodb = { version = "1.38.0", features = [] }
 axum = "0.7.5"
 jsonwebtoken = "9.3.0"
 jsonwebtokens-cognito = "0.1.1"

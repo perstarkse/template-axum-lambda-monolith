@@ -42,6 +42,20 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT: production
+          TEST_TABLE_NAME: !Ref TestTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref TestTable
+
+  TestTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      PrimaryKey:
+        Name: id
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
 
 Outputs:
   NxtpollApi:
@@ -53,3 +67,6 @@ Outputs:
   NxtpollApiFunctionIamRole:
     Description: "Implicit IAM Role created for Nxtpoll API function"
     Value: !GetAtt NxtpollApiFunctionRole.Arn
+  TestTableName:
+    Description: "Name of the DynamoDB table"
+    Value: !Ref TestTable

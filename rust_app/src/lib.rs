@@ -16,7 +16,8 @@ use crate::db::DynamoDb;
 pub async fn create_app(_config: Config) -> Router {
     // let auth_state = Arc::new(AuthState::new(config));
     println!("Initializing DynamoDB client");
-    let db = DynamoDb::new("test_table".to_string())
+    // let db = DynamoDb::new(config.dynamodb_table_name.to_string())
+    let db = DynamoDb::new("nxtpoll-api-TestTable-3YN7OM59HARI".to_string())
         .await
         .expect("Failed to initialize DynamoDB client");
 

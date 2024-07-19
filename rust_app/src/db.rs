@@ -16,13 +16,21 @@ pub struct Item {
     pub name: String,
     pub age: u32,
 }
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CreateItem {
+    pub name: String,
+    pub age: u32,
+}
 
 #[cfg_attr(test, automock)]
 #[async_trait]
 pub trait DynamoDbTrait {
     async fn get_item(&self, id: &str) -> Result<Option<Item>>;
-    async fn put_new_item(&self, item: Item) -> Result<String>;
+    async fn create(&self, item: CreateItem) -> Result<String>;
+    async fn update(&self, item: Item) -> Result<()>;
+    async fn delete(&self, id: &str) -> Result<()>;
 }
+
 #[derive(Clone)]
 pub struct DynamoDb {
     pub client: Client,
@@ -67,11 +75,17 @@ impl DynamoDbTrait for DynamoDb {
         }
     }
 
-    async fn put_new_item(&self, mut item: Item) -> Result<String> {
-        item.id = Uuid::new_v4().to_string();
+    async fn create(&self, create_item: CreateItem) -> Result<String> {
+        let id = Uuid::new_v4().to_string();
+        let item = Item {
+            id: id.clone(),
+            name: create_item.name,
+            age: create_item.age,
+        };
+        let dynamo_item = to_item(item)?;
 
-        let dynamo_item = to_item(item.clone())?;
-
+        println!("created item");
+        
         self.client
             .put_item()
             .table_name(&self.table_name)
@@ -80,8 +94,36 @@ impl DynamoDbTrait for DynamoDb {
             .send()
             .await?;
 
-        println!("Added item with id: {}", item.id);
-        Ok(item.id)
+        Ok(id)
+    }
+
+    async fn update(&self, item: Item) -> Result<()> {
+        let dynamo_item = to_item(item)?;
+
+        self.client
+            .put_item()
+            .table_name(&self.table_name)
+            .set_item(Some(dynamo_item))
+            .condition_expression("attribute_exists(id)")
+            .send()
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        let key = HashMap::from([
+            ("id".to_string(), AttributeValue::S(id.to_string())),
+        ]);
+
+        self.client
+            .delete_item()
+            .table_name(&self.table_name)
+            .set_key(Some(key))
+            .send()
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -111,20 +153,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_put_item() {
+    async fn test_create() {
         let mut mock = MockDynamoDbTrait::new();
-        mock.expect_put_new_item()
-            .with(function(|item: &Item| item.name == "Test Name" && item.age == 30))
+        mock.expect_create()
+            .with(function(|item: &CreateItem| item.name == "Test Name" && item.age == 30))
             .times(1)
             .returning(|_| Ok("new_id".to_string()));
 
-        let item = Item {
-            id: "".to_string(), // ID will be generated
+        let create_item = CreateItem {
             name: "Test Name".to_string(),
             age: 30,
         };
 
-        let result = mock.put_new_item(item).await.unwrap();
+        let result = mock.create(create_item).await.unwrap();
         assert_eq!(result, "new_id");
+    }
+
+    #[tokio::test]
+    async fn test_update() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_update()
+            .with(function(|item: &Item| {
+                item.id == "test_id" && item.name == "Updated Name" && item.age == 31
+            }))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let item = Item {
+            id: "test_id".to_string(),
+            name: "Updated Name".to_string(),
+            age: 31,
+        };
+
+        let result = mock.update(item).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_delete()
+            .with(eq("test_id"))
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let result = mock.delete("test_id").await;
+        assert!(result.is_ok());
     }
 }
