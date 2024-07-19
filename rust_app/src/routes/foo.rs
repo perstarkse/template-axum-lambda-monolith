@@ -1,7 +1,7 @@
 use axum::{Json, extract::Path};
 use serde_json::{json, Value};
 use axum::Extension;
-use crate::db::{DynamoDb, Item};
+use crate::db::{DynamoDb, DynamoDbTrait, Item};
 
 pub async fn get() -> Json<Value> {
     Json(json!({ "message": "I am GET /foo" }))
@@ -12,7 +12,7 @@ pub async fn get() -> Json<Value> {
     // Json(json!({ "message": "I am POST /foo" }))
 // }
 pub async fn post(Extension(db): Extension<DynamoDb>, Json(item): Json<Item>) -> Json<Value> {
-    match db.put_item(item).await {
+    match db.put_new_item(item).await {
         Ok(_) => Json(json!({ "message": "success" })),
         Err(e) => Json(json!({ "message": "failure", "error": e.to_string() })),
     }
