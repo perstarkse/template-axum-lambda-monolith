@@ -1,14 +1,14 @@
-use aws_sdk_dynamodb::{Client, Error};
-use aws_config::meta::region::RegionProviderChain;
-use serde::{Serialize, Deserialize};
-use serde_dynamo::{to_item, from_item};
-use aws_sdk_dynamodb::types::AttributeValue;
 use anyhow::Result;
-use uuid::Uuid;
-use std::collections::HashMap;
 use async_trait::async_trait;
+use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_dynamodb::types::AttributeValue;
+use aws_sdk_dynamodb::{Client, Error};
 #[cfg(test)]
 use mockall::automock;
+use serde::{Deserialize, Serialize};
+use serde_dynamo::{from_item, to_item};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Item {
@@ -29,7 +29,7 @@ pub trait DynamoDbTrait {
     async fn create(&self, item: CreateItem) -> Result<String>;
     async fn update(&self, item: Item) -> Result<()>;
     async fn delete(&self, id: &str) -> Result<()>;
-    async fn scan(&self) -> Result<Vec<Item>>; 
+    async fn scan(&self) -> Result<Vec<Item>>;
 }
 
 #[derive(Clone)]
@@ -47,10 +47,7 @@ impl DynamoDb {
             .await;
         let client = Client::new(&config);
 
-        Ok(Self {
-            client,
-            table_name,
-        })
+        Ok(Self { client, table_name })
     }
 }
 
@@ -61,7 +58,8 @@ impl DynamoDbTrait for DynamoDb {
         let mut last_evaluated_key = None;
 
         loop {
-            let mut scan_output = self.client
+            let mut scan_output = self
+                .client
                 .scan()
                 .table_name(&self.table_name)
                 .set_exclusive_start_key(last_evaluated_key)
@@ -84,11 +82,10 @@ impl DynamoDbTrait for DynamoDb {
         Ok(items)
     }
     async fn get_item(&self, id: &str) -> Result<Option<Item>> {
-        let key = HashMap::from([
-            ("id".to_string(), AttributeValue::S(id.to_string())),
-        ]);
+        let key = HashMap::from([("id".to_string(), AttributeValue::S(id.to_string()))]);
 
-        let result = self.client
+        let result = self
+            .client
             .get_item()
             .table_name(&self.table_name)
             .set_key(Some(key))
@@ -138,9 +135,7 @@ impl DynamoDbTrait for DynamoDb {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        let key = HashMap::from([
-            ("id".to_string(), AttributeValue::S(id.to_string())),
-        ]);
+        let key = HashMap::from([("id".to_string(), AttributeValue::S(id.to_string()))]);
 
         self.client
             .delete_item()
@@ -157,13 +152,12 @@ impl DynamoDbTrait for DynamoDb {
 mod tests {
     use super::*;
     use mockall::predicate::*;
-    
+
     #[tokio::test]
     async fn test_scan() {
         let mut mock = MockDynamoDbTrait::new();
-        mock.expect_scan()
-            .times(1)
-            .returning(|| Ok(vec![
+        mock.expect_scan().times(1).returning(|| {
+            Ok(vec![
                 Item {
                     id: "id1".to_string(),
                     name: "Name 1".to_string(),
@@ -174,7 +168,8 @@ mod tests {
                     name: "Name 2".to_string(),
                     age: 40,
                 },
-            ]));
+            ])
+        });
 
         let result = mock.scan().await.unwrap();
         assert_eq!(result.len(), 2);
@@ -188,11 +183,13 @@ mod tests {
         mock.expect_get_item()
             .with(eq("test_id"))
             .times(1)
-            .returning(|_| Ok(Some(Item {
-                id: "test_id".to_string(),
-                name: "Test Name".to_string(),
-                age: 30,
-            })));
+            .returning(|_| {
+                Ok(Some(Item {
+                    id: "test_id".to_string(),
+                    name: "Test Name".to_string(),
+                    age: 30,
+                }))
+            });
 
         let result = mock.get_item("test_id").await.unwrap();
         assert!(result.is_some());
@@ -206,7 +203,9 @@ mod tests {
     async fn test_create() {
         let mut mock = MockDynamoDbTrait::new();
         mock.expect_create()
-            .with(function(|item: &CreateItem| item.name == "Test Name" && item.age == 30))
+            .with(function(|item: &CreateItem| {
+                item.name == "Test Name" && item.age == 30
+            }))
             .times(1)
             .returning(|_| Ok("new_id".to_string()));
 

@@ -1,4 +1,4 @@
-use axum::{Json, extract::Query};
+use axum::{extract::Query, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -11,4 +11,3 @@ pub struct Params {
 pub async fn handler(Query(params): Query<Params>) -> Json<Value> {
     Json(json!({ "request parameters": params }))
 }
-

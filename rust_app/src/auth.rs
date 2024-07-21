@@ -1,4 +1,4 @@
-use jsonwebtokens_cognito::{KeySet, Error as JwtError};
+use jsonwebtokens_cognito::{Error as JwtError, KeySet};
 use serde::{Deserialize, Serialize};
 /// TODO
 /// Implement caching, look at the jsonwebtokens_cognito crate
@@ -38,14 +38,18 @@ impl Auth {
         Ok(Self { keyset })
     }
 
-    pub async fn verify_token(&self, token: &str, client_id: &str) -> Result<Claims, AuthError> {        
-        let verifier = self.keyset.new_id_token_verifier(&[client_id]).build().map_err(|e| AuthError::JwtError(e.into()))?;
-        
+    pub async fn verify_token(&self, token: &str, client_id: &str) -> Result<Claims, AuthError> {
+        let verifier = self
+            .keyset
+            .new_id_token_verifier(&[client_id])
+            .build()
+            .map_err(|e| AuthError::JwtError(e.into()))?;
+
         let claims = self.keyset.verify(token, &verifier).await?;
-        
+
         // Parse the claims into our Claims struct
         let claims: Claims = serde_json::from_value(claims)?;
-        
+
         Ok(claims)
     }
 }

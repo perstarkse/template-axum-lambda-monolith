@@ -16,7 +16,7 @@ NxtPoll API is a secure, serverless Rust application designed to handle polling 
 
 **Implement Rust Application**
 
-- \[ \] Set up a Rust project using Axum and Lambda.
+- \[x\] Set up a Rust project using Axum and Lambda.
 - \[ \] Add JWT token parsing and verification in your handler.
 - \[ \] Create routes and ensure user authentication.
 
@@ -37,7 +37,7 @@ NxtPoll API is a secure, serverless Rust application designed to handle polling 
 
 **Update SAM Template**
 
-- \[ \] Define Lambda function, API Gateway, and DynamoDB table.
+- \[x\] Define Lambda function, API Gateway, and DynamoDB table.
 - \[ \] Configure environment variables for JWKS URL and Cognito Client ID.
 - \[ \] Set up API Gateway Cognito Authorizer.
 - \[ \] Include OpenAPI spec location in the API Gateway definition.
