@@ -6,14 +6,20 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Claims {
-    pub sub: String,
-    pub exp: usize,
-    pub client_id: String,
-    pub scope: String,
-    pub token_use: String,
+    pub sub: String,            // Subject identifier (unique user ID)
+    pub exp: usize,             // Expiration time (Unix timestamp)
+    pub client_id: String,      // ID of the client application
+    pub scope: String,          // Permissions granted to the token
+    pub token_use: String,      // Type of token (e.g., "access")
+    pub username: String,       // Username (often same as sub)
+    pub auth_time: usize,       // Time of authentication (Unix timestamp)
+    pub iss: String,            // Issuer (Cognito user pool URL)
+    pub iat: usize,             // Issued at time (Unix timestamp)
+    pub jti: String,            // JWT ID (unique identifier for this token)
+    pub origin_jti: String,     // Original JWT ID
+    pub event_id: String,       // Unique identifier for the authentication event
 }
 
-// pub type SharedAuth = Arc<Auth>;
 #[derive(Clone)]
 pub struct Auth {
     keyset: KeySet,
@@ -51,14 +57,11 @@ impl Auth {
             .build()
             .map_err(|e| AuthError::JwtError(e.into()))?;
 
-        println!("We've created the verifier");
-
         let claims = self.keyset.verify(token, &verifier).await?;
 
-        println!("We've verified the token");
-
-        // Parse the claims into our Claims struct
         let claims: Claims = serde_json::from_value(claims)?;
+
+        println!("{:?}", &claims);
 
         Ok(claims)
     }
