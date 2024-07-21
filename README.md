@@ -1,3 +1,21 @@
+# AWS Rust Monolith API
+
+## Helpful hints
+
+sam build from base dir to generate the build
+sam local start-api --env-vars local-env.json to start a local api instance
+sam deploy to deploy
+
+## Features
+
+DynamoDB set up, single table for now
+
+## Why?
+
+Designed as a monolith to ease transitioning to another hosting solution
+Rust is fast anyways
+This design choice could be redone if application grows significantly
+
 # NxtPoll API
 
 NxtPoll API is a secure, serverless Rust application designed to handle polling operations. It leverages AWS Lambda and Cognito for authentication, providing a robust backend for polling applications.
