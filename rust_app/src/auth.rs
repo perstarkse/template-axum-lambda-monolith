@@ -1,17 +1,23 @@
 use jsonwebtokens_cognito::{Error as JwtError, KeySet};
 use serde::{Deserialize, Serialize};
+
 /// TODO
 /// Implement caching, look at the jsonwebtokens_cognito crate
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Claims {
     pub sub: String,
-    pub email: String,
     pub exp: usize,
+    pub client_id: String,
+    pub scope: String,
+    pub token_use: String,
 }
 
+// pub type SharedAuth = Arc<Auth>;
+#[derive(Clone)]
 pub struct Auth {
     keyset: KeySet,
+    client_id: String,
 }
 
 #[derive(Debug)]
@@ -33,19 +39,23 @@ impl From<serde_json::Error> for AuthError {
 }
 
 impl Auth {
-    pub fn new(region: &str, user_pool_id: &str) -> Result<Self, JwtError> {
+    pub fn new(region: &str, user_pool_id: &str, client_id: &str) -> Result<Self, JwtError> {
         let keyset = KeySet::new(region, user_pool_id)?;
-        Ok(Self { keyset })
+        Ok(Self { keyset, client_id: client_id.to_string() })
     }
 
-    pub async fn verify_token(&self, token: &str, client_id: &str) -> Result<Claims, AuthError> {
+    pub async fn verify_token(&self, token: &str) -> Result<Claims, AuthError> {
         let verifier = self
             .keyset
-            .new_id_token_verifier(&[client_id])
+            .new_access_token_verifier(&[&self.client_id])
             .build()
             .map_err(|e| AuthError::JwtError(e.into()))?;
 
+        println!("We've created the verifier");
+
         let claims = self.keyset.verify(token, &verifier).await?;
+
+        println!("We've verified the token");
 
         // Parse the claims into our Claims struct
         let claims: Claims = serde_json::from_value(claims)?;

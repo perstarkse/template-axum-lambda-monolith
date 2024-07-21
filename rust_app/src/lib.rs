@@ -4,19 +4,24 @@ pub mod db;
 pub mod error;
 pub mod routes;
 
+use auth::Auth;
 use axum::{routing::get, Extension, Router};
 use lambda_http::{run, tracing, Error};
 // use tracing_subscriber::field::MakeOutput;
 use crate::config::Config;
 use crate::db::DynamoDb;
 use crate::routes::{foo, health, parameters, root};
-// use crate::auth::{auth_middleware, AuthState};
-// use std::sync::Arc;
 
 pub async fn create_app(config: Config) -> Router {
-    // let auth_state = Arc::new(AuthState::new(config));
+    // println!("{}{}", &config.cognito_user_pool_id, &config.cognito_client_id);
 
-    println!("{}", &config.dynamodb_table_name);
+    let auth = Auth::new(
+            &config.cognito_region,
+            &config.cognito_user_pool_id,
+            &config.cognito_client_id
+    ).expect("Failed to create Auth");
+
+    // println!("{}", &config.dynamodb_table_name);
 
     let db = DynamoDb::new(config.dynamodb_table_name)
         .await
@@ -30,8 +35,9 @@ pub async fn create_app(config: Config) -> Router {
             get(foo::get_by_id).post(foo::update).delete(foo::delete),
         )
         .route("/parameters", get(parameters::handler))
-        .route("/health", get(health::check))
+        .route("/health", get(health::health))
         .layer(Extension(db))
+        .layer(Extension(auth))
     // .layer(Extension(auth_state.clone()))
     // .layer(from_fn(auth_middleware))
 }

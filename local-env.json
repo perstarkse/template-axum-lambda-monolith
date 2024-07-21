@@ -2,7 +2,10 @@
   "NxtpollApiFunction": {
     "ENVIRONMENT": "development",
     "TEST_TABLE_NAME": "nxtpoll-api-TestTable-3YN7OM59HARI",
-    "AWS_REGION": "us-east-1"
+    "AWS_REGION": "eu-north-1",
+    "COGNITO_REGION": "eu-north-1",
+    "COGNITO_USER_POOL_ID": "eu-north-1_M5gRziSym",
+    "COGNITO_CLIENT_ID": "4ql9carqqh2pj6nu3befiun7sh"
   }
 }
 

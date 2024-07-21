@@ -4,6 +4,7 @@
 
 sam build from base dir to generate the build
 sam local start-api --env-vars local-env.json to start a local api instance
+cargo deny --log-level error check to check licenses for dependencies
 sam deploy to deploy
 
 ## Features
