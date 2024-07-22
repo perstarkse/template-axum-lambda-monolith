@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// TODO
 /// Implement caching, look at the jsonwebtokens_cognito crate
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Claims {
     pub sub: String,            // Subject identifier (unique user ID)
     pub exp: usize,             // Expiration time (Unix timestamp)
@@ -60,8 +60,6 @@ impl Auth {
         let claims = self.keyset.verify(token, &verifier).await?;
 
         let claims: Claims = serde_json::from_value(claims)?;
-
-        println!("{:?}", &claims);
 
         Ok(claims)
     }

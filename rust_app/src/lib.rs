@@ -3,10 +3,13 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod routes;
+pub mod middleware;
 
 use auth::Auth;
+use axum::middleware::from_fn_with_state;
 use axum::{routing::get, Extension, Router};
 use lambda_http::{run, tracing, Error};
+use middleware::auth_middleware;
 // use tracing_subscriber::field::MakeOutput;
 use crate::config::Config;
 use crate::db::DynamoDb;
@@ -35,11 +38,10 @@ pub async fn create_app(config: Config) -> Router {
             get(foo::get_by_id).post(foo::update).delete(foo::delete),
         )
         .route("/parameters", get(parameters::handler))
-        .route("/health", get(health::health))
+        .route("/health", get(health::health).layer(from_fn_with_state(auth.clone(), auth_middleware)))
         .layer(Extension(db))
         .layer(Extension(auth))
     // .layer(Extension(auth_state.clone()))
-    // .layer(from_fn(auth_middleware))
 }
 
 pub async fn run_app(config: Config) -> Result<(), Error> {
