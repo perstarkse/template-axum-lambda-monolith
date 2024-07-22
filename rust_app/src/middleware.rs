@@ -1,11 +1,17 @@
 use axum::{
-    extract::Request, http::StatusCode, middleware::Next, response::Response, Extension, Json
+    extract::{Request, State}, http::StatusCode, middleware::Next, response::Response, Extension, Json
 };
 use serde_json::json;
 use crate::auth::Auth;
 
+#[derive(Clone)]
+pub struct AuthState {
+    pub auth: Auth,
+    pub require_auth: bool,
+}
+
 pub async fn auth_middleware(
-    Extension(auth): Extension<Auth>,
+    State(state): State<AuthState>,
     mut request: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
@@ -16,22 +22,32 @@ pub async fn auth_middleware(
 
     match auth_header {
         Some(token) => {
-            match auth.verify_token(token).await {
+            match state.auth.verify_token(token).await {
                 Ok(claims) => {
-                    // Add the verified claims to the request extensions
                     request.extensions_mut().insert(claims);
                     Ok(next.run(request).await)
                 },
-                Err(e) => Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({"error": format!("Invalid token: {:?}", e)}))
-                )),
+                Err(e) => {
+                    if state.require_auth {
+                        Err((
+                            StatusCode::UNAUTHORIZED,
+                            Json(json!({"error": format!("Invalid token: {:?}", e)}))
+                        ))
+                    } else {
+                        Ok(next.run(request).await)
+                    }
+                },
             }
         },
-        None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "No token provided"}))
-        )),
+        None => {
+            if state.require_auth {
+                Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "No token provided"}))
+                ))
+            } else {
+                Ok(next.run(request).await)
+            }
+        },
     }
 }
-

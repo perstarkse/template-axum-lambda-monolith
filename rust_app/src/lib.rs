@@ -9,11 +9,11 @@ use auth::Auth;
 use axum::middleware::from_fn_with_state;
 use axum::{routing::get, Extension, Router};
 use lambda_http::{run, tracing, Error};
-use middleware::auth_middleware;
+use middleware::{auth_middleware, AuthState};
 // use tracing_subscriber::field::MakeOutput;
 use crate::config::Config;
 use crate::db::DynamoDb;
-use crate::routes::{foo, health, parameters, root};
+use crate::routes::{foo, mixed, health, parameters, root};
 
 pub async fn create_app(config: Config) -> Router {
     // println!("{}{}", &config.cognito_user_pool_id, &config.cognito_client_id);
@@ -29,19 +29,33 @@ pub async fn create_app(config: Config) -> Router {
     let db = DynamoDb::new(config.dynamodb_table_name)
         .await
         .expect("Failed to initialize DynamoDB client");
+    
+    let auth_state = AuthState {
+        auth: auth.clone(),
+        require_auth: true,
+    };
+
+    let public_auth_state = AuthState {
+        auth: auth.clone(),
+        require_auth: false,
+    };
 
     Router::new()
+        // protected routes
         .route("/", get(root::handler))
+        .route("/parameters", get(parameters::handler))
+        .route("/health", get(health::health))
+        .layer(from_fn_with_state(auth_state, auth_middleware))
+        // public routes
         .route("/foo", get(foo::get).post(foo::post))
         .route(
             "/foo/:id",
             get(foo::get_by_id).post(foo::update).delete(foo::delete),
         )
-        .route("/parameters", get(parameters::handler))
-        .route("/health", get(health::health).layer(from_fn_with_state(auth.clone(), auth_middleware)))
+        .route("/mixed", get(mixed::mixed_handler))
+        .layer(from_fn_with_state(public_auth_state, auth_middleware))
         .layer(Extension(db))
         .layer(Extension(auth))
-    // .layer(Extension(auth_state.clone()))
 }
 
 pub async fn run_app(config: Config) -> Result<(), Error> {
