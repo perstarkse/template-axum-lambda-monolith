@@ -46,7 +46,7 @@ pub async fn create_app(config: Config) -> Router {
         .route("/parameters", get(parameters::handler))
         .route("/health", get(health::health))
         .layer(from_fn_with_state(auth_state, auth_middleware))
-        // public routes
+        // public routes but that validate if user sends auth headers
         .route("/foo", get(foo::get).post(foo::post))
         .route(
             "/foo/:id",
