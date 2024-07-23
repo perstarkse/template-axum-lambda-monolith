@@ -1,9 +1,6 @@
 use async_trait::async_trait;
 use jsonwebtokens_cognito::{Error as JwtError, KeySet};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use mockall::automock;
@@ -23,17 +20,11 @@ pub struct Claims {
     pub origin_jti: String, // Original JWT ID
     pub event_id: String,   // Unique identifier for the authentication event
 }
-#[cfg_attr(test, automock)]
-#[async_trait]
-pub trait AuthTrait {
-    async fn verify_token(&self, token: &str) -> Result<Claims, AuthError>;
-}
 
 #[derive(Clone)]
 pub struct Auth {
     keyset: KeySet,
     client_id: String,
-    token_cache: Arc<Mutex<HashMap<String, (Claims, Instant)>>>,
 }
 
 #[derive(Debug)]
@@ -54,13 +45,18 @@ impl From<serde_json::Error> for AuthError {
     }
 }
 
+#[cfg_attr(test, automock)]
+#[async_trait]
+pub trait AuthTrait {
+    async fn verify_token(&self, token: &str) -> Result<Claims, AuthError>;
+}
+
 impl Auth {
     pub fn new(region: &str, user_pool_id: &str, client_id: &str) -> Result<Self, JwtError> {
         let keyset = KeySet::new(region, user_pool_id)?;
         Ok(Self {
             keyset,
             client_id: client_id.to_string(),
-            token_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -68,14 +64,6 @@ impl Auth {
 #[async_trait]
 impl AuthTrait for Auth {
     async fn verify_token(&self, token: &str) -> Result<Claims, AuthError> {
-        // Check if the token is in the cache
-        if let Some((claims, expiry)) = self.token_cache.lock().unwrap().get(token) {
-            if Instant::now() < *expiry {
-                return Ok(claims.clone());
-            }
-        }
-
-        // If not in cache or expired, verify the token
         let verifier = self
             .keyset
             .new_access_token_verifier(&[&self.client_id])
@@ -85,16 +73,10 @@ impl AuthTrait for Auth {
         let claims = self.keyset.verify(token, &verifier).await?;
         let claims: Claims = serde_json::from_value(claims)?;
 
-        // Cache the verified token
-        let expiry = Instant::now() + Duration::from_secs((claims.exp - claims.iat) as u64);
-        self.token_cache
-            .lock()
-            .unwrap()
-            .insert(token.to_string(), (claims.clone(), expiry));
-
         Ok(claims)
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,24 +163,5 @@ mod tests {
         let result = mock.verify_token("malformed_token").await;
 
         assert!(matches!(result, Err(AuthError::ParsingError(_))));
-    }
-
-    #[tokio::test]
-    async fn test_verify_token_caching() {
-        let mut mock = MockAuthTrait::new();
-        let expected_claims = create_mock_claims();
-
-        mock.expect_verify_token()
-            .with(eq("cached_token"))
-            .times(1)
-            .returning(move |_| Ok(expected_claims.clone()));
-
-        // First call should verify the token
-        let result1 = mock.verify_token("cached_token").await.unwrap();
-        assert_eq!(result1.sub, "user123");
-
-        // Second call should return the cached result without calling verify_token again
-        let result2 = mock.verify_token("cached_token").await.unwrap();
-        assert_eq!(result2.sub, "user123");
     }
 }
