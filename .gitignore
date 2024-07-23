@@ -1,4 +1,5 @@
 .aws-sam
 .direnv
-rust_app/target
+target
 events
+accesstoken
