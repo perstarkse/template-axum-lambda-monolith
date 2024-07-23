@@ -5,7 +5,7 @@ version = 0.1
 
 [default]
 [default.global.parameters]
-stack_name = "nxtpoll-api"
+stack_name = "template-api"
 
 [default.build.parameters]
 cached = true
@@ -19,7 +19,7 @@ lint = true
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 resolve_s3 = true
-s3_prefix = "nxtpoll-api"
+s3_prefix = "template-api"
 region = "eu-north-1"
 image_repositories = []
 disable_rollback = true

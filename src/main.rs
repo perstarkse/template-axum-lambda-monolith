@@ -1,7 +1,7 @@
 use axum::{middleware::from_fn_with_state, routing::get, Extension, Router};
 use lambda_http::{run, Error};
 
-use nxtpoll_api::{
+use template::{
     auth::Auth,
     config::Config,
     db::DynamoDb,

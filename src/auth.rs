@@ -21,7 +21,7 @@ pub struct Claims {
     pub event_id: String,   // Unique identifier for the authentication event
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Auth {
     keyset: KeySet,
     client_id: String,

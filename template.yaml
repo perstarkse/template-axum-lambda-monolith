@@ -1,9 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  nxtpoll-api
+  template-api
 
-  SAM Template for nxtpoll-api
+  SAM Template for a API written in rust using Axum.
 
 Globals:
   Function:
@@ -14,7 +14,7 @@ Resources:
   CognitoUserPool:
     Type: AWS::Cognito::UserPool
     Properties:
-      UserPoolName: NxtpollUserPool
+      UserPoolName: TemplateUserPool
       AutoVerifiedAttributes:
         - email
       UsernameAttributes:
@@ -30,7 +30,7 @@ Resources:
   CognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
-      ClientName: NxtpollUserPoolClient
+      ClientName: TemplateUserPoolClient
       UserPoolId: !Ref CognitoUserPool
       GenerateSecret: false
       ExplicitAuthFlows:
@@ -47,8 +47,8 @@ Resources:
           - "*"
         AllowMethods:
           - "*"
-
-  NxtpollApiFunction:
+          
+  TemplateApiFunction:
     Type: AWS::Serverless::Function
     Metadata:
       BuildMethod: rust-cargolambda
@@ -68,15 +68,15 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT: production
-          TEST_TABLE_NAME: !Ref TestTable
+          TEST_TABLE_NAME: !Ref TemplateTable
           COGNITO_USER_POOL_ID: !Ref CognitoUserPool
           COGNITO_CLIENT_ID: !Ref CognitoUserPoolClient
           COGNITO_REGION: !Ref AWS::Region
       Policies:
         - DynamoDBCrudPolicy:
-            TableName: !Ref TestTable
+            TableName: !Ref TemplateTable
 
-  TestTable:
+  TemplateTable:
     Type: AWS::Serverless::SimpleTable
     Properties:
       PrimaryKey:
@@ -87,18 +87,18 @@ Resources:
         WriteCapacityUnits: 5
 
 Outputs:
-  NxtpollApi:
+  TemplateApi:
     Description: "API Gateway endpoint URL for Prod stage"
     Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/"
-  NxtpollApiFunction:
+  TemplateApiFunction:
     Description: "Nxtpoll API Lambda Function ARN"
     Value: !GetAtt NxtpollApiFunction.Arn
-  NxtpollApiFunctionIamRole:
+  TemplateApiFunctionIamRole:
     Description: "Implicit IAM Role created for Nxtpoll API function"
     Value: !GetAtt NxtpollApiFunctionRole.Arn
-  TestTableName:
+  TemplateTableName:
     Description: "Name of the DynamoDB table"
-    Value: !Ref TestTable
+    Value: !Ref TemplateTable
   CognitoUserPoolId:
     Description: "Cognito User Pool ID"
     Value: !Ref CognitoUserPool
