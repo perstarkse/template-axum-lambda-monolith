@@ -86,14 +86,14 @@ mod tests {
     fn create_mock_claims() -> Claims {
         Claims {
             sub: "user123".to_string(),
-            exp: 1625097600, // Example expiration time
+            exp: 1625097600,
             client_id: "test_client".to_string(),
             scope: "openid profile".to_string(),
             token_use: "access".to_string(),
             username: "testuser".to_string(),
-            auth_time: 1625011200, // Example auth time
+            auth_time: 1625011200,
             iss: "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_example".to_string(),
-            iat: 1625011200, // Example issued at time
+            iat: 1625011200,
             jti: "example-jti".to_string(),
             origin_jti: "example-origin-jti".to_string(),
             event_id: "example-event-id".to_string(),
@@ -103,12 +103,11 @@ mod tests {
     #[tokio::test]
     async fn test_verify_valid_token() {
         let mut mock = MockAuthTrait::new();
-        let expected_claims = create_mock_claims();
 
         mock.expect_verify_token()
             .with(eq("valid_token"))
             .times(1)
-            .returning(move |_| Ok(expected_claims.clone()));
+            .returning(move |_| Ok(create_mock_claims()));
 
         let result = mock.verify_token("valid_token").await.unwrap();
 
