@@ -1,11 +1,11 @@
 {
-  "NxtpollApiFunction": {
+  "TemplateApiFunction": {
     "ENVIRONMENT": "development",
-    "TEST_TABLE_NAME": "nxtpoll-api-TestTable-3YN7OM59HARI",
+    "TEST_TABLE_NAME": "template-api-TemplateTable-U0V6TTIAXNTT",
     "AWS_REGION": "eu-north-1",
     "COGNITO_REGION": "eu-north-1",
-    "COGNITO_USER_POOL_ID": "eu-north-1_M5gRziSym",
-    "COGNITO_CLIENT_ID": "4ql9carqqh2pj6nu3befiun7sh"
+    "COGNITO_USER_POOL_ID": "eu-north-1_yt3XvQhaQ",
+    "COGNITO_CLIENT_ID": "7s9utfvg4pqhkmb99t5pgcbbi7"
   }
 }
 
