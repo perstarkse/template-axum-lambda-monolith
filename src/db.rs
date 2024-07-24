@@ -16,7 +16,9 @@ pub struct Item {
     pub id: String,
     pub name: String,
     pub age: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_by: Option<String>,
 }
 
@@ -68,13 +70,16 @@ impl DynamoDbTrait for DynamoDb {
             .get_item()
             .table_name(&self.table_name)
             .set_key(Some(key))
-            .projection_expression("attribute_not_exists(deleted_at)")
             .send()
             .await?;
 
         if let Some(item) = result.item {
             let item: Item = from_item(item)?;
-            Ok(Some(item))
+            if item.deleted_at.is_none() {
+                Ok(Some(item))
+            } else {
+                Ok(None)
+            }
         } else {
             Ok(None)
         }
