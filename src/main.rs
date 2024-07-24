@@ -4,7 +4,7 @@ use lambda_http::{run, Error};
 use template::{
     auth::Auth,
     config::Config,
-    db::DynamoDb,
+    db::{DynamoDbRepository, Item},
     middleware::auth_middleware,
     routes::{foo, health, mixed, parameters, root},
 };
@@ -17,7 +17,7 @@ async fn create_app(config: Config) -> Router {
     )
     .expect("Failed to create Auth");
 
-    let db = DynamoDb::new(config.dynamodb_table_name)
+    let db = DynamoDbRepository::<Item>::new(config.dynamodb_table_name)
         .await
         .expect("Failed to initialize DynamoDB client");
 

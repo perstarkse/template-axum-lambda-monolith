@@ -3,13 +3,10 @@ use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::{Client, Error};
-#[cfg(test)]
-use mockall::automock;
 use serde::{Deserialize, Serialize};
 use serde_dynamo::{from_item, to_item};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Item {
@@ -28,26 +25,38 @@ pub struct CreateItem {
     pub age: u32,
 }
 
-#[cfg_attr(test, automock)]
 #[async_trait]
-pub trait DynamoDbTrait {
-    async fn get_item(&self, id: &str) -> Result<Option<Item>>;
-    async fn create(&self, item: CreateItem) -> Result<String>;
-    async fn update(&self, item: Item) -> Result<()>;
+impl SoftDeletable for Item {
+    fn get_deleted_at(&self) -> &Option<String> {
+        &self.deleted_at
+    }
+}
+
+#[async_trait]
+pub trait SoftDeletable: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync {
+    fn get_deleted_at(&self) -> &Option<String>;
+}
+
+#[async_trait]
+pub trait DynamoDbOperations<T>: Send + Sync {
+    async fn get_item(&self, id: &str) -> Result<Option<T>>;
+    async fn create(&self, item: T) -> Result<String>;
+    async fn update(&self, item: T) -> Result<()>;
     async fn delete(&self, id: &str) -> Result<()>;
     async fn soft_delete(&self, id: &str, user_id: &str) -> Result<()>;
-    async fn scan(&self) -> Result<Vec<Item>>;
-    async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<Item>>;
-    async fn get_deleted_items(&self) -> Result<Vec<Item>>;
+    async fn scan(&self) -> Result<Vec<T>>;
+    async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<T>>;
+    async fn get_deleted_items(&self) -> Result<Vec<T>>;
 }
 
 #[derive(Clone)]
-pub struct DynamoDb {
+pub struct DynamoDbRepository<T> {
     pub client: Client,
     pub table_name: String,
+    pub _phantom: std::marker::PhantomData<T>,
 }
 
-impl DynamoDb {
+impl<T> DynamoDbRepository<T> {
     pub async fn new(table_name: String) -> Result<Self, Error> {
         let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
         let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -56,13 +65,20 @@ impl DynamoDb {
             .await;
         let client = Client::new(&config);
 
-        Ok(Self { client, table_name })
+        Ok(Self {
+            client,
+            table_name,
+            _phantom: std::marker::PhantomData,
+        })
     }
 }
 
 #[async_trait]
-impl DynamoDbTrait for DynamoDb {
-    async fn get_item(&self, id: &str) -> Result<Option<Item>> {
+impl<T> DynamoDbOperations<T> for DynamoDbRepository<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync + 'static + SoftDeletable,
+{
+    async fn get_item(&self, id: &str) -> Result<Option<T>> {
         let key = HashMap::from([("id".to_string(), AttributeValue::S(id.to_string()))]);
 
         let result = self
@@ -74,8 +90,8 @@ impl DynamoDbTrait for DynamoDb {
             .await?;
 
         if let Some(item) = result.item {
-            let item: Item = from_item(item)?;
-            if item.deleted_at.is_none() {
+            let item: T = from_item(item)?;
+            if item.get_deleted_at().is_none() {
                 Ok(Some(item))
             } else {
                 Ok(None)
@@ -85,7 +101,7 @@ impl DynamoDbTrait for DynamoDb {
         }
     }
 
-    async fn scan(&self) -> Result<Vec<Item>> {
+    async fn scan(&self) -> Result<Vec<T>> {
         let mut items = Vec::new();
         let mut last_evaluated_key = None;
 
@@ -115,7 +131,7 @@ impl DynamoDbTrait for DynamoDb {
         Ok(items)
     }
 
-    async fn update(&self, item: Item) -> Result<()> {
+    async fn update(&self, item: T) -> Result<()> {
         let dynamo_item = to_item(item)?;
 
         self.client
@@ -129,15 +145,7 @@ impl DynamoDbTrait for DynamoDb {
         Ok(())
     }
 
-    async fn create(&self, create_item: CreateItem) -> Result<String> {
-        let id = Uuid::new_v4().to_string();
-        let item = Item {
-            id: id.clone(),
-            name: create_item.name,
-            age: create_item.age,
-            deleted_at: None,
-            deleted_by: None,
-        };
+    async fn create(&self, item: T) -> Result<String> {
         let dynamo_item = to_item(item)?;
 
         self.client
@@ -148,7 +156,7 @@ impl DynamoDbTrait for DynamoDb {
             .send()
             .await?;
 
-        Ok(id)
+        Ok("Item successfully created".to_string())
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
@@ -196,7 +204,7 @@ impl DynamoDbTrait for DynamoDb {
         }
     }
 
-    async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<Item>> {
+    async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<T>> {
         let mut items = Vec::new();
         let mut last_evaluated_key = None;
 
@@ -227,7 +235,7 @@ impl DynamoDbTrait for DynamoDb {
         Ok(items)
     }
 
-    async fn get_deleted_items(&self) -> Result<Vec<Item>> {
+    async fn get_deleted_items(&self) -> Result<Vec<T>> {
         let mut items = Vec::new();
         let mut last_evaluated_key = None;
 
@@ -262,300 +270,333 @@ impl DynamoDbTrait for DynamoDb {
 mod tests {
     use super::*;
     use mockall::predicate::*;
+    use mockall::*;
+    use tokio;
 
-    #[tokio::test]
-    async fn test_scan() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_scan().times(1).returning(|| {
-            Ok(vec![
-                Item {
-                    id: "id1".to_string(),
-                    name: "Name 1".to_string(),
-                    age: 30,
-                    deleted_at: None,
-                    deleted_by: None,
-                },
-                Item {
-                    id: "id2".to_string(),
-                    name: "Name 2".to_string(),
-                    age: 40,
-                    deleted_at: None,
-                    deleted_by: None,
-                },
-            ])
-        });
+    #[derive(Debug, Serialize, Deserialize, Clone)]
+    struct TestItem {
+        pub id: String,
+        pub name: String,
+        pub age: u32,
+        pub deleted_at: Option<String>,
+        pub deleted_by: Option<String>,
+    }
 
-        let result = mock.scan().await.unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].id, "id1");
-        assert_eq!(result[1].id, "id2");
+    #[async_trait]
+    impl SoftDeletable for TestItem {
+        fn get_deleted_at(&self) -> &Option<String> {
+            &self.deleted_at
+        }
+    }
+
+    mock! {
+        pub DynamoDbTestItem {}
+
+        #[async_trait]
+        impl DynamoDbOperations<TestItem> for DynamoDbTestItem {
+            async fn get_item(&self, id: &str) -> Result<Option<TestItem>>;
+            async fn create(&self, item: TestItem) -> Result<String>;
+            async fn update(&self, item: TestItem) -> Result<()>;
+            async fn delete(&self, id: &str) -> Result<()>;
+            async fn soft_delete(&self, id: &str, user_id: &str) -> Result<()>;
+            async fn scan(&self) -> Result<Vec<TestItem>>;
+            async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<TestItem>>;
+            async fn get_deleted_items(&self) -> Result<Vec<TestItem>>;
+        }
     }
 
     #[tokio::test]
     async fn test_get_item() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_get_item()
-            .with(eq("test_id"))
-            .times(1)
-            .returning(|_| {
-                Ok(Some(Item {
-                    id: "test_id".to_string(),
-                    name: "Test Name".to_string(),
-                    age: 30,
-                    deleted_at: None,
-                    deleted_by: None,
-                }))
-            });
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-        let result = mock.get_item("test_id").await.unwrap();
+        let test_item = TestItem {
+            id: "test_id".to_string(),
+            name: "test_name".to_string(),
+            age: 30,
+            deleted_at: None,
+            deleted_by: None,
+        };
+
+        mock_db
+            .expect_get_item()
+            .with(eq("test_id"))
+            .returning(move |_| Ok(Some(test_item.clone())));
+
+        let result = mock_db.get_item("test_id").await.unwrap();
         assert!(result.is_some());
-        let item = result.unwrap();
-        assert_eq!(item.id, "test_id");
-        assert_eq!(item.name, "Test Name");
-        assert_eq!(item.age, 30);
+        assert_eq!(result.unwrap().name, "test_name");
     }
 
     #[tokio::test]
-    async fn test_get_deleted_item() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_get_item()
-            .with(eq("deleted_id"))
-            .times(1)
+    async fn test_get_item_not_found() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        mock_db
+            .expect_get_item()
+            .with(eq("non_existing_id"))
             .returning(|_| Ok(None));
 
-        let result = mock.get_item("deleted_id").await.unwrap();
+        let result = mock_db.get_item("non_existing_id").await.unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
-    async fn test_create() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_create()
-            .with(function(|item: &CreateItem| {
-                item.name == "Test Name" && item.age == 30
-            }))
-            .times(1)
-            .returning(|_| Ok("new_id".to_string()));
+    async fn test_create_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-        let create_item = CreateItem {
-            name: "Test Name".to_string(),
-            age: 30,
-        };
-
-        let result = mock.create(create_item).await.unwrap();
-        assert_eq!(result, "new_id");
-    }
-
-    #[tokio::test]
-    async fn test_create_existing_id() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_create()
-            .with(function(|item: &CreateItem| {
-                item.name == "Test Name" && item.age == 30
-            }))
-            .times(1)
-            .returning(|_| Err(anyhow::anyhow!("Item already exists")));
-
-        let create_item = CreateItem {
-            name: "Test Name".to_string(),
-            age: 30,
-        };
-
-        let result = mock.create(create_item).await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Item already exists");
-    }
-
-    #[tokio::test]
-    async fn test_update() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_update()
-            .with(function(|item: &Item| {
-                item.id == "test_id" && item.name == "Updated Name" && item.age == 31
-            }))
-            .times(1)
-            .returning(|_| Ok(()));
-
-        let item = Item {
-            id: "test_id".to_string(),
-            name: "Updated Name".to_string(),
-            age: 31,
-            deleted_at: None,
-            deleted_by: None,
-        };
-
-        let result = mock.update(item).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_update_non_existent_item() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_update()
-            .with(function(|item: &Item| item.id == "non_existent_id"))
-            .times(1)
-            .returning(|_| Err(anyhow::anyhow!("Item does not exist")));
-
-        let item = Item {
-            id: "non_existent_id".to_string(),
-            name: "Non-existent Item".to_string(),
+        let test_item = TestItem {
+            id: "new_id".to_string(),
+            name: "new_name".to_string(),
             age: 25,
             deleted_at: None,
             deleted_by: None,
         };
 
-        let result = mock.update(item).await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "Item does not exist");
+        mock_db
+            .expect_create()
+            .returning(|_| Ok("Item successfully created".to_string()));
+
+        let result = mock_db.create(test_item).await.unwrap();
+        assert_eq!(result, "Item successfully created");
     }
 
     #[tokio::test]
-    async fn test_delete() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_delete()
-            .with(eq("test_id"))
-            .times(1)
+    async fn test_create_item_fail() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        let test_item = TestItem {
+            id: "existing_id".to_string(),
+            name: "existing_name".to_string(),
+            age: 40,
+            deleted_at: None,
+            deleted_by: None,
+        };
+
+        mock_db
+            .expect_create()
+            .returning(|_| Err(anyhow::anyhow!("Failed to create item")));
+
+        let result = mock_db.create(test_item).await;
+        assert!(result.is_err());
+    }
+    #[tokio::test]
+    async fn test_update_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        let test_item = TestItem {
+            id: "update_id".to_string(),
+            name: "updated_name".to_string(),
+            age: 35,
+            deleted_at: None,
+            deleted_by: None,
+        };
+
+        mock_db.expect_update().returning(|_| Ok(()));
+
+        let result = mock_db.update(test_item).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        mock_db
+            .expect_delete()
+            .with(eq("delete_id"))
             .returning(|_| Ok(()));
 
-        let result = mock.delete("test_id").await;
+        let result = mock_db.delete("delete_id").await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_delete_non_existent_item() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_delete()
-            .with(eq("non_existent_id"))
-            .times(1)
-            .returning(|_| Ok(())); // DynamoDB doesn't return an error for deleting non-existent items
+    async fn test_soft_delete_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-        let result = mock.delete("non_existent_id").await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_soft_delete() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_soft_delete()
-            .with(eq("test_id"), eq("user1"))
-            .times(1)
+        mock_db
+            .expect_soft_delete()
+            .with(eq("soft_delete_id"), eq("user_123"))
             .returning(|_, _| Ok(()));
 
-        let result = mock.soft_delete("test_id", "user1").await;
+        let result = mock_db.soft_delete("soft_delete_id", "user_123").await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_soft_delete_failure() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_soft_delete()
-            .with(eq("error_id"), eq("user1"))
-            .times(1)
-            .returning(|_, _| {
-                Err(anyhow::anyhow!(
-                    "Failed to soft delete item: Some error occurred"
-                ))
-            });
+    async fn test_scan_items() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-        let result = mock.soft_delete("error_id", "user1").await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .starts_with("Failed to soft delete item:"));
-    }
+        let test_items = vec![
+            TestItem {
+                id: "id1".to_string(),
+                name: "name1".to_string(),
+                age: 30,
+                deleted_at: None,
+                deleted_by: None,
+            },
+            TestItem {
+                id: "id2".to_string(),
+                name: "name2".to_string(),
+                age: 40,
+                deleted_at: None,
+                deleted_by: None,
+            },
+        ];
 
-    #[tokio::test]
-    async fn test_soft_delete_non_existent_or_deleted_item() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_soft_delete()
-            .with(eq("non_existent_or_deleted_id"), eq("user1"))
-            .times(1)
-            .returning(|_, _| Err(anyhow::anyhow!("Item is already deleted or doesn't exist")));
+        mock_db
+            .expect_scan()
+            .returning(move || Ok(test_items.clone()));
 
-        let result = mock
-            .soft_delete("non_existent_or_deleted_id", "user1")
-            .await;
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Item is already deleted or doesn't exist"
-        );
+        let result = mock_db.scan().await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "name1");
+        assert_eq!(result[1].name, "name2");
     }
 
     #[tokio::test]
     async fn test_get_deleted_items_by_user() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_get_deleted_items_by_user()
-            .with(eq("user1"))
-            .times(1)
-            .returning(|_| {
-                Ok(vec![Item {
-                    id: "deleted_id".to_string(),
-                    name: "Deleted Item".to_string(),
-                    age: 25,
-                    deleted_at: Some("2023-05-01T12:00:00Z".to_string()),
-                    deleted_by: Some("user1".to_string()),
-                }])
-            });
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-        let result = mock.get_deleted_items_by_user("user1").await.unwrap();
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id, "deleted_id");
-        assert_eq!(result[0].deleted_by, Some("user1".to_string()));
+        let deleted_items = vec![
+            TestItem {
+                id: "del_id1".to_string(),
+                name: "del_name1".to_string(),
+                age: 50,
+                deleted_at: Some("2023-05-01".to_string()),
+                deleted_by: Some("user_456".to_string()),
+            },
+            TestItem {
+                id: "del_id2".to_string(),
+                name: "del_name2".to_string(),
+                age: 60,
+                deleted_at: Some("2023-05-02".to_string()),
+                deleted_by: Some("user_456".to_string()),
+            },
+        ];
+
+        mock_db
+            .expect_get_deleted_items_by_user()
+            .with(eq("user_456"))
+            .returning(move |_| Ok(deleted_items.clone()));
+
+        let result = mock_db.get_deleted_items_by_user("user_456").await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].deleted_by, Some("user_456".to_string()));
+        assert_eq!(result[1].deleted_by, Some("user_456".to_string()));
     }
-
     #[tokio::test]
     async fn test_get_deleted_items() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_get_deleted_items().times(1).returning(|| {
-            Ok(vec![
-                Item {
-                    id: "deleted_id1".to_string(),
-                    name: "Deleted Item 1".to_string(),
-                    age: 25,
-                    deleted_at: Some("2023-05-01T12:00:00Z".to_string()),
-                    deleted_by: Some("user1".to_string()),
-                },
-                Item {
-                    id: "deleted_id2".to_string(),
-                    name: "Deleted Item 2".to_string(),
-                    age: 30,
-                    deleted_at: Some("2023-05-02T12:00:00Z".to_string()),
-                    deleted_by: Some("user2".to_string()),
-                },
-            ])
-        });
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-        let result = mock.get_deleted_items().await.unwrap();
+        let deleted_items = vec![
+            TestItem {
+                id: "del_id1".to_string(),
+                name: "del_name1".to_string(),
+                age: 50,
+                deleted_at: Some("2023-05-01".to_string()),
+                deleted_by: Some("user_123".to_string()),
+            },
+            TestItem {
+                id: "del_id2".to_string(),
+                name: "del_name2".to_string(),
+                age: 60,
+                deleted_at: Some("2023-05-02".to_string()),
+                deleted_by: Some("user_456".to_string()),
+            },
+        ];
+
+        mock_db
+            .expect_get_deleted_items()
+            .returning(move || Ok(deleted_items.clone()));
+
+        let result = mock_db.get_deleted_items().await.unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].id, "deleted_id1");
-        assert_eq!(result[1].id, "deleted_id2");
+        assert!(result[0].deleted_at.is_some());
+        assert!(result[1].deleted_at.is_some());
     }
 
     #[tokio::test]
-    async fn test_update_deleted_item() {
-        let mut mock = MockDynamoDbTrait::new();
-        mock.expect_update()
-            .with(function(|item: &Item| {
-                item.id == "deleted_id" && item.deleted_at.is_some()
-            }))
-            .times(1)
-            .returning(|_| Err(anyhow::anyhow!("Cannot update deleted item")));
+    async fn test_update_item_fail() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-        let item = Item {
-            id: "deleted_id".to_string(),
-            name: "Deleted Item".to_string(),
-            age: 25,
-            deleted_at: Some("2023-05-01T12:00:00Z".to_string()),
-            deleted_by: Some("user1".to_string()),
+        let test_item = TestItem {
+            id: "update_fail_id".to_string(),
+            name: "update_fail_name".to_string(),
+            age: 35,
+            deleted_at: None,
+            deleted_by: None,
         };
 
-        let result = mock.update(item).await;
+        mock_db
+            .expect_update()
+            .returning(|_| Err(anyhow::anyhow!("Failed to update item")));
+
+        let result = mock_db.update(test_item).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "Cannot update deleted item"
-        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_item_fail() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        mock_db
+            .expect_delete()
+            .with(eq("delete_fail_id"))
+            .returning(|_| Err(anyhow::anyhow!("Failed to delete item")));
+
+        let result = mock_db.delete("delete_fail_id").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_soft_delete_item_fail() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        mock_db
+            .expect_soft_delete()
+            .with(eq("soft_delete_fail_id"), eq("user_789"))
+            .returning(|_, _| Err(anyhow::anyhow!("Failed to soft delete item")));
+
+        let result = mock_db.soft_delete("soft_delete_fail_id", "user_789").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_scan_items_empty() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        mock_db.expect_scan().returning(move || Ok(vec![]));
+
+        let result = mock_db.scan().await.unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_deleted_items_by_user_empty() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        mock_db
+            .expect_get_deleted_items_by_user()
+            .with(eq("non_deleting_user"))
+            .returning(move |_| Ok(vec![]));
+
+        let result = mock_db
+            .get_deleted_items_by_user("non_deleting_user")
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_deleted_items_empty() {
+        let mut mock_db = MockDynamoDbTestItem::new();
+
+        mock_db
+            .expect_get_deleted_items()
+            .returning(move || Ok(vec![]));
+
+        let result = mock_db.get_deleted_items().await.unwrap();
+        assert_eq!(result.len(), 0);
     }
 }
