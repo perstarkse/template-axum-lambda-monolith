@@ -1,3 +1,4 @@
+use crate::auth::Claims;
 use crate::db::{CreateItem, DynamoDb, DynamoDbTrait, Item};
 use axum::Extension;
 use axum::{extract::Path, Json};
@@ -42,9 +43,19 @@ pub async fn update(
     }
 }
 
-pub async fn delete(Extension(db): Extension<DynamoDb>, Path(id): Path<String>) -> Json<Value> {
-    match db.delete(&id).await {
-        Ok(()) => Json(json!({ "message": "Item deleted successfully" })),
-        Err(e) => Json(json!({ "error": e.to_string() })),
+pub async fn delete(
+    Extension(db): Extension<DynamoDb>,
+    Path(id): Path<String>,
+    claims: Option<Extension<Claims>>,
+) -> Json<Value> {
+    match claims {
+        Some(claims) => match db.soft_delete(&id, &claims.username).await {
+            Ok(()) => Json(json!({ "message": "Item deleted successfully" })),
+            Err(e) => Json(json!({ "error": e.to_string() })),
+        },
+        None => Json(json!({
+            "message": "You are not authenticated",
+            "public_info": "This is publicly available information"
+        })),
     }
 }

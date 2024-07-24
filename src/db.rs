@@ -171,19 +171,29 @@ impl DynamoDbTrait for DynamoDb {
             .as_secs()
             .to_string();
 
-        let update_expression = "SET deleted_at = :deleted_at, deleted_by = :deleted_by";
-
-        self.client
+        let result = self
+            .client
             .update_item()
             .table_name(&self.table_name)
             .key("id", AttributeValue::S(id.to_string()))
-            .update_expression(update_expression)
+            .update_expression("SET deleted_at = :deleted_at, deleted_by = :deleted_by")
+            .condition_expression("attribute_exists(id) AND attribute_not_exists(deleted_at)")
             .expression_attribute_values(":deleted_at", AttributeValue::S(now))
             .expression_attribute_values(":deleted_by", AttributeValue::S(user_id.to_string()))
             .send()
-            .await?;
+            .await;
 
-        Ok(())
+        match result {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                if let aws_sdk_dynamodb::error::SdkError::ServiceError(service_err) = &err {
+                    if service_err.err().is_conditional_check_failed_exception() {
+                        return Err(anyhow::anyhow!("Item is already deleted or doesn't exist"));
+                    }
+                }
+                Err(anyhow::anyhow!("Failed to soft delete item: {}", err))
+            }
+        }
     }
 
     async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<Item>> {
@@ -337,6 +347,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_existing_id() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_create()
+            .with(function(|item: &CreateItem| {
+                item.name == "Test Name" && item.age == 30
+            }))
+            .times(1)
+            .returning(|_| Err(anyhow::anyhow!("Item already exists")));
+
+        let create_item = CreateItem {
+            name: "Test Name".to_string(),
+            age: 30,
+        };
+
+        let result = mock.create(create_item).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Item already exists");
+    }
+
+    #[tokio::test]
     async fn test_update() {
         let mut mock = MockDynamoDbTrait::new();
         mock.expect_update()
@@ -359,6 +389,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_non_existent_item() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_update()
+            .with(function(|item: &Item| item.id == "non_existent_id"))
+            .times(1)
+            .returning(|_| Err(anyhow::anyhow!("Item does not exist")));
+
+        let item = Item {
+            id: "non_existent_id".to_string(),
+            name: "Non-existent Item".to_string(),
+            age: 25,
+            deleted_at: None,
+            deleted_by: None,
+        };
+
+        let result = mock.update(item).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Item does not exist");
+    }
+
+    #[tokio::test]
     async fn test_delete() {
         let mut mock = MockDynamoDbTrait::new();
         mock.expect_delete()
@@ -367,6 +418,18 @@ mod tests {
             .returning(|_| Ok(()));
 
         let result = mock.delete("test_id").await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_non_existent_item() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_delete()
+            .with(eq("non_existent_id"))
+            .times(1)
+            .returning(|_| Ok(())); // DynamoDB doesn't return an error for deleting non-existent items
+
+        let result = mock.delete("non_existent_id").await;
         assert!(result.is_ok());
     }
 
@@ -380,6 +443,44 @@ mod tests {
 
         let result = mock.soft_delete("test_id", "user1").await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_soft_delete_failure() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_soft_delete()
+            .with(eq("error_id"), eq("user1"))
+            .times(1)
+            .returning(|_, _| {
+                Err(anyhow::anyhow!(
+                    "Failed to soft delete item: Some error occurred"
+                ))
+            });
+
+        let result = mock.soft_delete("error_id", "user1").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Failed to soft delete item:"));
+    }
+
+    #[tokio::test]
+    async fn test_soft_delete_non_existent_or_deleted_item() {
+        let mut mock = MockDynamoDbTrait::new();
+        mock.expect_soft_delete()
+            .with(eq("non_existent_or_deleted_id"), eq("user1"))
+            .times(1)
+            .returning(|_, _| Err(anyhow::anyhow!("Item is already deleted or doesn't exist")));
+
+        let result = mock
+            .soft_delete("non_existent_or_deleted_id", "user1")
+            .await;
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Item is already deleted or doesn't exist"
+        );
     }
 
     #[tokio::test]
@@ -452,5 +553,9 @@ mod tests {
 
         let result = mock.update(item).await;
         assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Cannot update deleted item"
+        );
     }
 }
