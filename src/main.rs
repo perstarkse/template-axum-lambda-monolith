@@ -4,9 +4,10 @@ use lambda_http::{run, Error};
 use template::{
     auth::Auth,
     config::Config,
-    db::{DynamoDbRepository, Item},
+    db::DynamoDbRepository,
     middleware::auth_middleware,
-    routes::{foo, health, mixed, parameters, root},
+    models::item::Item,
+    routes::{foo, parameters},
 };
 
 async fn create_app(config: Config) -> Router {
@@ -22,15 +23,12 @@ async fn create_app(config: Config) -> Router {
         .expect("Failed to initialize DynamoDB client");
 
     Router::new()
-        .route("/", get(root::handler))
         .route("/parameters", get(parameters::handler))
-        .route("/health", get(health::health))
         .route("/foo", get(foo::get).post(foo::post))
         .route(
             "/foo/:id",
             get(foo::get_by_id).post(foo::update).delete(foo::delete),
         )
-        .route("/mixed", get(mixed::mixed_handler))
         .layer(from_fn_with_state(auth, auth_middleware))
         .layer(Extension(db))
 }

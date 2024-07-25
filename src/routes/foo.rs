@@ -1,5 +1,6 @@
 use crate::auth::Claims;
-use crate::db::{CreateItem, DynamoDbOperations, DynamoDbRepository, Item};
+use crate::db::{DynamoDbOperations, DynamoDbRepository};
+use crate::models::item::{CreateItem, Item};
 use axum::Extension;
 use axum::{extract::Path, Json};
 use serde_json::{json, Value};

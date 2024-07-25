@@ -8,30 +8,6 @@ use serde_dynamo::{from_item, to_item};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Item {
-    pub id: String,
-    pub name: String,
-    pub age: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted_by: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CreateItem {
-    pub name: String,
-    pub age: u32,
-}
-
-#[async_trait]
-impl SoftDeletable for Item {
-    fn get_deleted_at(&self) -> &Option<String> {
-        &self.deleted_at
-    }
-}
-
 #[async_trait]
 pub trait SoftDeletable: Serialize + for<'de> Deserialize<'de> + Clone + Send + Sync {
     fn get_deleted_at(&self) -> &Option<String>;
