@@ -5,6 +5,7 @@ use template::{
     auth::Auth,
     config::Config,
     db::DynamoDbRepository,
+    logging,
     middleware::auth_middleware,
     models::item::Item,
     routes::{foo, parameters},
@@ -35,6 +36,7 @@ async fn create_app(config: Config) -> Router {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    logging::init_logger();
     let config = Config::from_env();
     let app = create_app(config).await;
     run(app).await
