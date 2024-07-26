@@ -25,7 +25,7 @@ async fn create_app(config: Config) -> Router {
 
     Router::new()
         .route("/parameters", get(parameters::handler))
-        .route("/foo", get(foo::get).post(foo::post))
+        .route("/foo", get(foo::get).post(foo::create))
         .route(
             "/foo/:id",
             get(foo::get_by_id).post(foo::update).delete(foo::delete),
