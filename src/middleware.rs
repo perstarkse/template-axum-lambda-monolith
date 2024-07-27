@@ -1,18 +1,15 @@
-use crate::auth::{Auth, AuthError, AuthTrait};
+use crate::auth::{Auth, AuthOperations};
 use axum::{
     extract::{Request, State},
-    http::StatusCode,
     middleware::Next,
-    response::Response,
-    Json,
+    response::{IntoResponse, Response},
 };
-use serde_json::json;
 
 pub async fn auth_middleware(
     State(state): State<Auth>,
     mut request: Request,
     next: Next,
-) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+) -> Response {
     let auth_header = request
         .headers()
         .get("Authorization")
@@ -23,24 +20,10 @@ pub async fn auth_middleware(
         Some(token) => match state.verify_token(token).await {
             Ok(claims) => {
                 request.extensions_mut().insert(claims);
-                Ok(next.run(request).await)
+                next.run(request).await
             }
-            Err(e) => {
-                let (status, message) = match e {
-                    AuthError::JwtError(jwt_error) => match jwt_error {
-                        jsonwebtokens_cognito::Error::InvalidSignature() => {
-                            (StatusCode::UNAUTHORIZED, "Invalid token signature")
-                        }
-                        jsonwebtokens_cognito::Error::TokenExpiredAt(_) => {
-                            (StatusCode::UNAUTHORIZED, "Token has expired")
-                        }
-                        _ => (StatusCode::UNAUTHORIZED, "Invalid token"),
-                    },
-                    AuthError::ParsingError(_) => (StatusCode::BAD_REQUEST, "Malformed token"),
-                };
-                Err((status, Json(json!({ "error": message }))))
-            }
+            Err(e) => e.into_response(),
         },
-        None => Ok(next.run(request).await),
+        None => next.run(request).await,
     }
 }

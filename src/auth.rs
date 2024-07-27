@@ -1,9 +1,12 @@
 use async_trait::async_trait;
+use axum::{response::IntoResponse, Json};
 use jsonwebtokens_cognito::{Error as JwtError, KeySet};
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
 use mockall::automock;
+use serde_json::json;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Claims {
@@ -29,51 +32,84 @@ pub struct Auth {
 
 #[derive(Debug)]
 pub enum AuthError {
-    JwtError(JwtError),
-    ParsingError(serde_json::Error),
+    InvalidSignature,
+    TokenExpired,
+    InvalidToken,
+    MalformedToken,
+    VerifierFailedBuilding(String),
+    VerificationFailed(String),
+    ConversionError(String),
 }
 
-impl From<JwtError> for AuthError {
-    fn from(err: JwtError) -> Self {
-        AuthError::JwtError(err)
-    }
-}
-
-impl From<serde_json::Error> for AuthError {
-    fn from(err: serde_json::Error) -> Self {
-        AuthError::ParsingError(err)
+impl IntoResponse for AuthError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            AuthError::InvalidSignature => (
+                StatusCode::UNAUTHORIZED,
+                Json(json!("Invalid token signature")),
+            )
+                .into_response(),
+            AuthError::TokenExpired => {
+                (StatusCode::UNAUTHORIZED, Json(json!("Token has expired"))).into_response()
+            }
+            AuthError::InvalidToken => {
+                (StatusCode::UNAUTHORIZED, Json(json!("Invalid token"))).into_response()
+            }
+            AuthError::MalformedToken => {
+                (StatusCode::BAD_REQUEST, Json(json!("Malformed token"))).into_response()
+            }
+            AuthError::VerifierFailedBuilding(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(err))).into_response()
+            }
+            AuthError::VerificationFailed(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(err))).into_response()
+            }
+            AuthError::ConversionError(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!(err))).into_response()
+            }
+        }
     }
 }
 
 #[cfg_attr(test, automock)]
 #[async_trait]
-pub trait AuthTrait {
+pub trait AuthOperations {
     async fn verify_token(&self, token: &str) -> Result<Claims, AuthError>;
 }
 
 impl Auth {
     pub fn new(region: &str, user_pool_id: &str, client_id: &str) -> Result<Self, JwtError> {
-        let keyset = KeySet::new(region, user_pool_id)?;
-        Ok(Self {
-            keyset,
-            client_id: client_id.to_string(),
-        })
+        match KeySet::new(region, user_pool_id) {
+            Ok(keyset) => Ok(Self {
+                keyset,
+                client_id: client_id.to_string(),
+            }),
+            Err(err) => Err(err),
+        }
     }
 }
 
 #[async_trait]
-impl AuthTrait for Auth {
+impl AuthOperations for Auth {
     async fn verify_token(&self, token: &str) -> Result<Claims, AuthError> {
-        let verifier = self
+        match self
             .keyset
             .new_access_token_verifier(&[&self.client_id])
             .build()
-            .map_err(|e| AuthError::JwtError(e.into()))?;
-
-        let claims = self.keyset.verify(token, &verifier).await?;
-        let claims: Claims = serde_json::from_value(claims)?;
-
-        Ok(claims)
+        {
+            Ok(verifier) => match self.keyset.verify(token, &verifier).await {
+                Ok(claims) => match serde_json::from_value(claims) {
+                    Ok(claims) => Ok(claims),
+                    Err(err) => Err(AuthError::ConversionError(err.to_string())),
+                },
+                Err(err) => match err {
+                    JwtError::InvalidSignature() => Err(AuthError::InvalidSignature),
+                    JwtError::TokenExpiredAt(_) => Err(AuthError::TokenExpired),
+                    _ => Err(AuthError::VerificationFailed(err.to_string())),
+                },
+            },
+            Err(err) => Err(AuthError::VerifierFailedBuilding(err.to_string())),
+        }
     }
 }
 
@@ -81,7 +117,6 @@ impl AuthTrait for Auth {
 mod tests {
     use super::*;
     use mockall::predicate::*;
-    use serde::de::Error;
 
     fn create_mock_claims() -> Claims {
         Claims {
@@ -102,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify_valid_token() {
-        let mut mock = MockAuthTrait::new();
+        let mut mock = MockAuthOperations::new();
 
         mock.expect_verify_token()
             .with(eq("valid_token"))
@@ -118,49 +153,43 @@ mod tests {
 
     #[tokio::test]
     async fn test_verify_invalid_token() {
-        let mut mock = MockAuthTrait::new();
+        let mut mock = MockAuthOperations::new();
 
         mock.expect_verify_token()
             .with(eq("invalid_token"))
             .times(1)
-            .returning(|_| Err(AuthError::JwtError(JwtError::InvalidSignature())));
+            .returning(|_| Err(AuthError::InvalidSignature));
 
         let result = mock.verify_token("invalid_token").await;
 
-        assert!(matches!(
-            result,
-            Err(AuthError::JwtError(JwtError::InvalidSignature()))
-        ));
+        assert!(matches!(result, Err(AuthError::InvalidSignature)));
     }
 
     #[tokio::test]
     async fn test_verify_expired_token() {
-        let mut mock = MockAuthTrait::new();
+        let mut mock = MockAuthOperations::new();
 
         mock.expect_verify_token()
             .with(eq("expired_token"))
             .times(1)
-            .returning(|_| Err(AuthError::JwtError(JwtError::TokenExpiredAt(0))));
+            .returning(|_| Err(AuthError::TokenExpired));
 
         let result = mock.verify_token("expired_token").await;
 
-        assert!(matches!(
-            result,
-            Err(AuthError::JwtError(JwtError::TokenExpiredAt(0)))
-        ));
+        assert!(matches!(result, Err(AuthError::TokenExpired)));
     }
 
     #[tokio::test]
     async fn test_verify_token_parsing_error() {
-        let mut mock = MockAuthTrait::new();
+        let mut mock = MockAuthOperations::new();
 
         mock.expect_verify_token()
             .with(eq("malformed_token"))
             .times(1)
-            .returning(|_| Err(AuthError::ParsingError(serde_json::Error::custom("error"))));
+            .returning(|_| Err(AuthError::ConversionError("error".to_string())));
 
         let result = mock.verify_token("malformed_token").await;
 
-        assert!(matches!(result, Err(AuthError::ParsingError(_))));
+        assert!(matches!(result, Err(AuthError::ConversionError(_))));
     }
 }

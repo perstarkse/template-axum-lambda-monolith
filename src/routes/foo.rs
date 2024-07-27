@@ -88,7 +88,7 @@ pub async fn delete(
     match claims {
         Some(claims) => match db.soft_delete(id, claims.username.clone()).await {
             OperationResult::Success(_) => (
-                StatusCode::OK,
+                StatusCode::NO_CONTENT,
                 Json(json!({"message": "Item was successfully removed"})),
             )
                 .into_response(),
