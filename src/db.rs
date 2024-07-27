@@ -1,7 +1,9 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_dynamodb::operation::delete_item::DeleteItemError;
 use aws_sdk_dynamodb::operation::put_item::PutItemError;
+use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
 use aws_sdk_dynamodb::types::AttributeValue;
 use aws_sdk_dynamodb::{Client, Error};
 use axum::response::IntoResponse;
@@ -59,11 +61,11 @@ pub trait DynamoDbOperations<T>: Send + Sync {
     async fn get_item(&self, id: String) -> OperationResult<T>;
     async fn create(&self, item: T) -> OperationResult<T>;
     async fn update(&self, item: T) -> OperationResult<T>;
-    async fn delete(&self, id: &str) -> Result<()>;
-    async fn soft_delete(&self, id: &str, user_id: &str) -> Result<()>;
-    async fn scan(&self) -> Result<Vec<T>>;
-    async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<T>>;
-    async fn get_deleted_items(&self) -> Result<Vec<T>>;
+    async fn delete(&self, id: String) -> OperationResult<T>;
+    async fn soft_delete(&self, id: String, user_id: String) -> OperationResult<T>;
+    async fn scan(&self) -> OperationResult<Vec<T>>;
+    async fn get_deleted_items_by_user(&self, user_id: String) -> OperationResult<Vec<T>>;
+    async fn get_deleted_items(&self) -> OperationResult<Vec<T>>;
 }
 
 #[derive(Clone)]
@@ -127,35 +129,43 @@ where
         }
     }
 
-    async fn scan(&self) -> Result<Vec<T>> {
+    async fn scan(&self) -> OperationResult<Vec<T>> {
         let mut items = Vec::new();
         let mut last_evaluated_key = None;
 
         loop {
-            let scan_output = self
+            match self
                 .client
                 .scan()
                 .table_name(&self.table_name)
                 .filter_expression("attribute_not_exists(deleted_at)")
                 .set_exclusive_start_key(last_evaluated_key)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(result) => {
+                    if let Some(scanned_items) = result.items {
+                        for item in scanned_items {
+                            match from_item(item) {
+                                Ok(item) => items.push(item),
+                                Err(err) => return OperationResult::InternalError(err.to_string()),
+                            }
+                        }
+                    }
 
-            if let Some(scanned_items) = scan_output.items {
-                for item in scanned_items {
-                    items.push(from_item(item)?);
+                    last_evaluated_key = result.last_evaluated_key;
+
+                    if last_evaluated_key.is_none() {
+                        break;
+                    }
                 }
-            }
-
-            last_evaluated_key = scan_output.last_evaluated_key;
-
-            if last_evaluated_key.is_none() {
-                break;
+                Err(err) => return OperationResult::InternalError(err.to_string()),
             }
         }
 
-        Ok(items)
+        OperationResult::Success(Some(items))
     }
+
     async fn update(&self, item: T) -> OperationResult<T> {
         let dynamo_item = match to_item(item) {
             Ok(item) => item,
@@ -204,27 +214,36 @@ where
         }
     }
 
-    async fn delete(&self, id: &str) -> Result<()> {
-        let key = HashMap::from([("id".to_string(), AttributeValue::S(id.to_string()))]);
+    async fn delete(&self, id: String) -> OperationResult<T> {
+        let key = HashMap::from([("id".to_string(), AttributeValue::S(id))]);
 
-        self.client
+        match self
+            .client
             .delete_item()
             .table_name(&self.table_name)
             .set_key(Some(key))
+            .condition_expression("attribute_exists(id)")
             .send()
-            .await?;
-
-        Ok(())
+            .await
+        {
+            Ok(_) => OperationResult::Success(None),
+            Err(err) => match err.into_service_error() {
+                DeleteItemError::ConditionalCheckFailedException(_) => {
+                    OperationResult::ItemNotFound
+                }
+                _ => OperationResult::InternalError("Service Error".to_string()),
+            },
+        }
     }
 
-    async fn soft_delete(&self, id: &str, user_id: &str) -> Result<()> {
+    async fn soft_delete(&self, id: String, user_id: String) -> OperationResult<T> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs()
             .to_string();
 
-        let result = self
+        match self
             .client
             .update_item()
             .table_name(&self.table_name)
@@ -234,414 +253,460 @@ where
             .expression_attribute_values(":deleted_at", AttributeValue::S(now))
             .expression_attribute_values(":deleted_by", AttributeValue::S(user_id.to_string()))
             .send()
-            .await;
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                if let aws_sdk_dynamodb::error::SdkError::ServiceError(service_err) = &err {
-                    if service_err.err().is_conditional_check_failed_exception() {
-                        return Err(anyhow::anyhow!("Item is already deleted or doesn't exist"));
-                    }
+            .await
+        {
+            Ok(_) => OperationResult::Success(None),
+            Err(err) => match err.into_service_error() {
+                UpdateItemError::ConditionalCheckFailedException(_) => {
+                    OperationResult::ItemNotFound
                 }
-                Err(anyhow::anyhow!("Failed to soft delete item: {}", err))
-            }
+                _ => OperationResult::InternalError("Service Error".to_string()),
+            },
         }
     }
 
-    async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<T>> {
+    async fn get_deleted_items_by_user(&self, user_id: String) -> OperationResult<Vec<T>> {
         let mut items = Vec::new();
         let mut last_evaluated_key = None;
 
         loop {
-            let scan_output = self
+            match self
                 .client
                 .scan()
                 .table_name(&self.table_name)
-                .filter_expression("deleted_by = :user_id")
+                .filter_expression("attribute_exists(deleted_at) AND deleted_by = :user_id")
                 .expression_attribute_values(":user_id", AttributeValue::S(user_id.to_string()))
                 .set_exclusive_start_key(last_evaluated_key)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(result) => {
+                    if let Some(scanned_items) = result.items {
+                        for item in scanned_items {
+                            match from_item(item) {
+                                Ok(item) => items.push(item),
+                                Err(err) => return OperationResult::InternalError(err.to_string()),
+                            }
+                        }
+                    }
 
-            if let Some(scanned_items) = scan_output.items {
-                for item in scanned_items {
-                    items.push(from_item(item)?);
+                    last_evaluated_key = result.last_evaluated_key;
+
+                    if last_evaluated_key.is_none() {
+                        break;
+                    }
                 }
-            }
-
-            last_evaluated_key = scan_output.last_evaluated_key;
-
-            if last_evaluated_key.is_none() {
-                break;
+                Err(err) => return OperationResult::InternalError(err.to_string()),
             }
         }
-
-        Ok(items)
+        OperationResult::Success(Some(items))
     }
 
-    async fn get_deleted_items(&self) -> Result<Vec<T>> {
+    async fn get_deleted_items(&self) -> OperationResult<Vec<T>> {
         let mut items = Vec::new();
         let mut last_evaluated_key = None;
 
         loop {
-            let scan_output = self
+            match self
                 .client
                 .scan()
                 .table_name(&self.table_name)
                 .filter_expression("attribute_exists(deleted_at)")
                 .set_exclusive_start_key(last_evaluated_key)
                 .send()
-                .await?;
+                .await
+            {
+                Ok(result) => {
+                    if let Some(scanned_items) = result.items {
+                        for item in scanned_items {
+                            match from_item(item) {
+                                Ok(item) => items.push(item),
+                                Err(err) => return OperationResult::InternalError(err.to_string()),
+                            }
+                        }
+                    }
 
-            if let Some(scanned_items) = scan_output.items {
-                for item in scanned_items {
-                    items.push(from_item(item)?);
+                    last_evaluated_key = result.last_evaluated_key;
+
+                    if last_evaluated_key.is_none() {
+                        break;
+                    }
                 }
-            }
-
-            last_evaluated_key = scan_output.last_evaluated_key;
-
-            if last_evaluated_key.is_none() {
-                break;
+                Err(err) => return OperationResult::InternalError(err.to_string()),
             }
         }
-
-        Ok(items)
+        OperationResult::Success(Some(items))
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use mockall::predicate::*;
-//     use mockall::*;
-//     use tokio;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mockall::predicate::*;
+    use mockall::*;
+    use tokio;
 
-//     #[derive(Debug, Serialize, Deserialize, Clone)]
-//     struct TestItem {
-//         pub id: String,
-//         pub name: String,
-//         pub age: u32,
-//         pub deleted_at: Option<String>,
-//         pub deleted_by: Option<String>,
-//     }
+    #[derive(Debug, Serialize, Deserialize, Clone)]
+    struct TestItem {
+        pub id: String,
+        pub name: String,
+        pub age: u32,
+        pub deleted_at: Option<String>,
+        pub deleted_by: Option<String>,
+    }
 
-//     #[async_trait]
-//     impl SoftDeletable for TestItem {
-//         fn get_deleted_at(&self) -> &Option<String> {
-//             &self.deleted_at
-//         }
-//     }
+    #[async_trait]
+    impl SoftDeletable for TestItem {
+        fn get_deleted_at(&self) -> &Option<String> {
+            &self.deleted_at
+        }
+    }
 
-//     mock! {
-//         pub DynamoDbTestItem {}
+    mock! {
+        pub DynamoDbTestItem {}
 
-//         #[async_trait]
-//         impl DynamoDbOperations<TestItem> for DynamoDbTestItem {
-//             async fn get_item(&self, id: &str) -> Result<Option<TestItem>>;
-//             async fn create(&self, item: TestItem) -> Result<String>;
-//             async fn update(&self, item: TestItem) -> Result<()>;
-//             async fn delete(&self, id: &str) -> Result<()>;
-//             async fn soft_delete(&self, id: &str, user_id: &str) -> Result<()>;
-//             async fn scan(&self) -> Result<Vec<TestItem>>;
-//             async fn get_deleted_items_by_user(&self, user_id: &str) -> Result<Vec<TestItem>>;
-//             async fn get_deleted_items(&self) -> Result<Vec<TestItem>>;
-//         }
-//     }
+        #[async_trait]
+        impl DynamoDbOperations<TestItem> for DynamoDbTestItem {
+            async fn get_item(&self, id: String) -> OperationResult<TestItem>;
+            async fn create(&self, item: TestItem) -> OperationResult<TestItem>;
+            async fn update(&self, item: TestItem) -> OperationResult<TestItem>;
+            async fn delete(&self, id: String) -> OperationResult<TestItem>;
+            async fn soft_delete(&self, id: String, user_id: String) -> OperationResult<TestItem>;
+            async fn scan(&self) -> OperationResult<Vec<TestItem>>;
+            async fn get_deleted_items_by_user(&self, user_id: String) -> OperationResult<Vec<TestItem>>;
+            async fn get_deleted_items(&self) -> OperationResult<Vec<TestItem>>;
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_get_item() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+    #[tokio::test]
+    async fn test_get_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         let test_item = TestItem {
-//             id: "test_id".to_string(),
-//             name: "test_name".to_string(),
-//             age: 30,
-//             deleted_at: None,
-//             deleted_by: None,
-//         };
+        let test_item = TestItem {
+            id: "test_id".to_string(),
+            name: "test_name".to_string(),
+            age: 30,
+            deleted_at: None,
+            deleted_by: None,
+        };
 
-//         mock_db
-//             .expect_get_item()
-//             .with(eq("test_id"))
-//             .returning(move |_| Ok(Some(test_item.clone())));
+        mock_db
+            .expect_get_item()
+            .with(eq("test_id".to_string()))
+            .returning(move |_| OperationResult::Success(Some(test_item.clone())));
 
-//         let result = mock_db.get_item("test_id").await.unwrap();
-//         assert!(result.is_some());
-//         assert_eq!(result.unwrap().name, "test_name");
-//     }
+        let result = mock_db.get_item("test_id".to_string()).await;
+        match result {
+            OperationResult::Success(Some(item)) => assert_eq!(item.name, "test_name"),
+            _ => panic!("Expected Success with item"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_get_item_not_found() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+    #[tokio::test]
+    async fn test_get_item_not_found() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         mock_db
-//             .expect_get_item()
-//             .with(eq("non_existing_id"))
-//             .returning(|_| Ok(None));
+        mock_db
+            .expect_get_item()
+            .with(eq("non_existing_id".to_string()))
+            .returning(|_| OperationResult::ItemNotFound);
 
-//         let result = mock_db.get_item("non_existing_id").await.unwrap();
-//         assert!(result.is_none());
-//     }
+        let result = mock_db.get_item("non_existing_id".to_string()).await;
+        assert!(matches!(result, OperationResult::ItemNotFound));
+    }
 
-//     #[tokio::test]
-//     async fn test_create_item() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+    #[tokio::test]
+    async fn test_create_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         let test_item = TestItem {
-//             id: "new_id".to_string(),
-//             name: "new_name".to_string(),
-//             age: 25,
-//             deleted_at: None,
-//             deleted_by: None,
-//         };
+        let test_item = TestItem {
+            id: "new_id".to_string(),
+            name: "new_name".to_string(),
+            age: 25,
+            deleted_at: None,
+            deleted_by: None,
+        };
 
-//         mock_db
-//             .expect_create()
-//             .returning(|_| Ok("Item successfully created".to_string()));
+        mock_db
+            .expect_create()
+            .returning(|_| OperationResult::Success(None));
 
-//         let result = mock_db.create(test_item).await.unwrap();
-//         assert_eq!(result, "Item successfully created");
-//     }
+        let result = mock_db.create(test_item).await;
+        assert!(matches!(result, OperationResult::Success(None)));
+    }
 
-//     #[tokio::test]
-//     async fn test_create_item_fail() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+    #[tokio::test]
+    async fn test_create_item_fail() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         let test_item = TestItem {
-//             id: "existing_id".to_string(),
-//             name: "existing_name".to_string(),
-//             age: 40,
-//             deleted_at: None,
-//             deleted_by: None,
-//         };
+        let test_item = TestItem {
+            id: "existing_id".to_string(),
+            name: "existing_name".to_string(),
+            age: 40,
+            deleted_at: None,
+            deleted_by: None,
+        };
 
-//         mock_db
-//             .expect_create()
-//             .returning(|_| Err(anyhow::anyhow!("Failed to create item")));
+        mock_db
+            .expect_create()
+            .returning(|_| OperationResult::ItemAlreadyExists);
 
-//         let result = mock_db.create(test_item).await;
-//         assert!(result.is_err());
-//     }
-//     #[tokio::test]
-//     async fn test_update_item() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        let result = mock_db.create(test_item).await;
+        assert!(matches!(result, OperationResult::ItemAlreadyExists));
+    }
 
-//         let test_item = TestItem {
-//             id: "update_id".to_string(),
-//             name: "updated_name".to_string(),
-//             age: 35,
-//             deleted_at: None,
-//             deleted_by: None,
-//         };
+    #[tokio::test]
+    async fn test_update_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         mock_db.expect_update().returning(|_| Ok(()));
+        let test_item = TestItem {
+            id: "update_id".to_string(),
+            name: "updated_name".to_string(),
+            age: 35,
+            deleted_at: None,
+            deleted_by: None,
+        };
 
-//         let result = mock_db.update(test_item).await;
-//         assert!(result.is_ok());
-//     }
+        mock_db
+            .expect_update()
+            .returning(|_| OperationResult::Success(None));
 
-//     #[tokio::test]
-//     async fn test_delete_item() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        let result = mock_db.update(test_item).await;
+        assert!(matches!(result, OperationResult::Success(None)));
+    }
 
-//         mock_db
-//             .expect_delete()
-//             .with(eq("delete_id"))
-//             .returning(|_| Ok(()));
+    #[tokio::test]
+    async fn test_delete_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         let result = mock_db.delete("delete_id").await;
-//         assert!(result.is_ok());
-//     }
+        mock_db
+            .expect_delete()
+            .with(eq("delete_id".to_string()))
+            .returning(|_| OperationResult::Success(None));
 
-//     #[tokio::test]
-//     async fn test_soft_delete_item() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        let result = mock_db.delete("delete_id".to_string()).await;
+        assert!(matches!(result, OperationResult::Success(None)));
+    }
 
-//         mock_db
-//             .expect_soft_delete()
-//             .with(eq("soft_delete_id"), eq("user_123"))
-//             .returning(|_, _| Ok(()));
+    #[tokio::test]
+    async fn test_soft_delete_item() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         let result = mock_db.soft_delete("soft_delete_id", "user_123").await;
-//         assert!(result.is_ok());
-//     }
+        mock_db
+            .expect_soft_delete()
+            .with(eq("soft_delete_id".to_string()), eq("user_123".to_string()))
+            .returning(|_, _| OperationResult::Success(None));
 
-//     #[tokio::test]
-//     async fn test_scan_items() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        let result = mock_db
+            .soft_delete("soft_delete_id".to_string(), "user_123".to_string())
+            .await;
+        assert!(matches!(result, OperationResult::Success(None)));
+    }
 
-//         let test_items = vec![
-//             TestItem {
-//                 id: "id1".to_string(),
-//                 name: "name1".to_string(),
-//                 age: 30,
-//                 deleted_at: None,
-//                 deleted_by: None,
-//             },
-//             TestItem {
-//                 id: "id2".to_string(),
-//                 name: "name2".to_string(),
-//                 age: 40,
-//                 deleted_at: None,
-//                 deleted_by: None,
-//             },
-//         ];
+    #[tokio::test]
+    async fn test_scan_items() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         mock_db
-//             .expect_scan()
-//             .returning(move || Ok(test_items.clone()));
+        let test_items = vec![
+            TestItem {
+                id: "id1".to_string(),
+                name: "name1".to_string(),
+                age: 30,
+                deleted_at: None,
+                deleted_by: None,
+            },
+            TestItem {
+                id: "id2".to_string(),
+                name: "name2".to_string(),
+                age: 40,
+                deleted_at: None,
+                deleted_by: None,
+            },
+        ];
 
-//         let result = mock_db.scan().await.unwrap();
-//         assert_eq!(result.len(), 2);
-//         assert_eq!(result[0].name, "name1");
-//         assert_eq!(result[1].name, "name2");
-//     }
+        mock_db
+            .expect_scan()
+            .returning(move || OperationResult::Success(Some(test_items.clone())));
 
-//     #[tokio::test]
-//     async fn test_get_deleted_items_by_user() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        let result = mock_db.scan().await;
+        match result {
+            OperationResult::Success(Some(items)) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].name, "name1");
+                assert_eq!(items[1].name, "name2");
+            }
+            _ => panic!("Expected Success with items"),
+        }
+    }
 
-//         let deleted_items = vec![
-//             TestItem {
-//                 id: "del_id1".to_string(),
-//                 name: "del_name1".to_string(),
-//                 age: 50,
-//                 deleted_at: Some("2023-05-01".to_string()),
-//                 deleted_by: Some("user_456".to_string()),
-//             },
-//             TestItem {
-//                 id: "del_id2".to_string(),
-//                 name: "del_name2".to_string(),
-//                 age: 60,
-//                 deleted_at: Some("2023-05-02".to_string()),
-//                 deleted_by: Some("user_456".to_string()),
-//             },
-//         ];
+    #[tokio::test]
+    async fn test_get_deleted_items_by_user() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         mock_db
-//             .expect_get_deleted_items_by_user()
-//             .with(eq("user_456"))
-//             .returning(move |_| Ok(deleted_items.clone()));
+        let deleted_items = vec![
+            TestItem {
+                id: "del_id1".to_string(),
+                name: "del_name1".to_string(),
+                age: 50,
+                deleted_at: Some("2023-05-01".to_string()),
+                deleted_by: Some("user_456".to_string()),
+            },
+            TestItem {
+                id: "del_id2".to_string(),
+                name: "del_name2".to_string(),
+                age: 60,
+                deleted_at: Some("2023-05-02".to_string()),
+                deleted_by: Some("user_456".to_string()),
+            },
+        ];
 
-//         let result = mock_db.get_deleted_items_by_user("user_456").await.unwrap();
-//         assert_eq!(result.len(), 2);
-//         assert_eq!(result[0].deleted_by, Some("user_456".to_string()));
-//         assert_eq!(result[1].deleted_by, Some("user_456".to_string()));
-//     }
-//     #[tokio::test]
-//     async fn test_get_deleted_items() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        mock_db
+            .expect_get_deleted_items_by_user()
+            .with(eq("user_456".to_string()))
+            .returning(move |_| OperationResult::Success(Some(deleted_items.clone())));
 
-//         let deleted_items = vec![
-//             TestItem {
-//                 id: "del_id1".to_string(),
-//                 name: "del_name1".to_string(),
-//                 age: 50,
-//                 deleted_at: Some("2023-05-01".to_string()),
-//                 deleted_by: Some("user_123".to_string()),
-//             },
-//             TestItem {
-//                 id: "del_id2".to_string(),
-//                 name: "del_name2".to_string(),
-//                 age: 60,
-//                 deleted_at: Some("2023-05-02".to_string()),
-//                 deleted_by: Some("user_456".to_string()),
-//             },
-//         ];
+        let result = mock_db
+            .get_deleted_items_by_user("user_456".to_string())
+            .await;
+        match result {
+            OperationResult::Success(Some(items)) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].deleted_by, Some("user_456".to_string()));
+                assert_eq!(items[1].deleted_by, Some("user_456".to_string()));
+            }
+            _ => panic!("Expected Success with items"),
+        }
+    }
 
-//         mock_db
-//             .expect_get_deleted_items()
-//             .returning(move || Ok(deleted_items.clone()));
+    #[tokio::test]
+    async fn test_get_deleted_items() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         let result = mock_db.get_deleted_items().await.unwrap();
-//         assert_eq!(result.len(), 2);
-//         assert!(result[0].deleted_at.is_some());
-//         assert!(result[1].deleted_at.is_some());
-//     }
+        let deleted_items = vec![
+            TestItem {
+                id: "del_id1".to_string(),
+                name: "del_name1".to_string(),
+                age: 50,
+                deleted_at: Some("2023-05-01".to_string()),
+                deleted_by: Some("user_123".to_string()),
+            },
+            TestItem {
+                id: "del_id2".to_string(),
+                name: "del_name2".to_string(),
+                age: 60,
+                deleted_at: Some("2023-05-02".to_string()),
+                deleted_by: Some("user_456".to_string()),
+            },
+        ];
 
-//     #[tokio::test]
-//     async fn test_update_item_fail() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        mock_db
+            .expect_get_deleted_items()
+            .returning(move || OperationResult::Success(Some(deleted_items.clone())));
 
-//         let test_item = TestItem {
-//             id: "update_fail_id".to_string(),
-//             name: "update_fail_name".to_string(),
-//             age: 35,
-//             deleted_at: None,
-//             deleted_by: None,
-//         };
+        let result = mock_db.get_deleted_items().await;
+        match result {
+            OperationResult::Success(Some(items)) => {
+                assert_eq!(items.len(), 2);
+                assert!(items[0].deleted_at.is_some());
+                assert!(items[1].deleted_at.is_some());
+            }
+            _ => panic!("Expected Success with items"),
+        }
+    }
 
-//         mock_db
-//             .expect_update()
-//             .returning(|_| Err(anyhow::anyhow!("Failed to update item")));
+    #[tokio::test]
+    async fn test_create_item_already_exists() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         let result = mock_db.update(test_item).await;
-//         assert!(result.is_err());
-//     }
+        let test_item = TestItem {
+            id: "existing_id".to_string(),
+            name: "existing_name".to_string(),
+            age: 40,
+            deleted_at: None,
+            deleted_by: None,
+        };
 
-//     #[tokio::test]
-//     async fn test_delete_item_fail() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        mock_db
+            .expect_create()
+            .returning(|_| OperationResult::ItemAlreadyExists);
 
-//         mock_db
-//             .expect_delete()
-//             .with(eq("delete_fail_id"))
-//             .returning(|_| Err(anyhow::anyhow!("Failed to delete item")));
+        let result = mock_db.create(test_item).await;
+        assert!(matches!(result, OperationResult::ItemAlreadyExists));
+    }
 
-//         let result = mock_db.delete("delete_fail_id").await;
-//         assert!(result.is_err());
-//     }
+    #[tokio::test]
+    async fn test_soft_delete_item_already_deleted() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//     #[tokio::test]
-//     async fn test_soft_delete_item_fail() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+        let deleted_item = TestItem {
+            id: "soft_delete_id".to_string(),
+            name: "deleted_name".to_string(),
+            age: 35,
+            deleted_at: Some("2023-06-01".to_string()),
+            deleted_by: Some("user_123".to_string()),
+        };
 
-//         mock_db
-//             .expect_soft_delete()
-//             .with(eq("soft_delete_fail_id"), eq("user_789"))
-//             .returning(|_, _| Err(anyhow::anyhow!("Failed to soft delete item")));
+        mock_db
+            .expect_soft_delete()
+            .with(eq("soft_delete_id".to_string()), eq("user_123".to_string()))
+            .returning(move |_, _| OperationResult::Success(Some(deleted_item.clone())));
 
-//         let result = mock_db.soft_delete("soft_delete_fail_id", "user_789").await;
-//         assert!(result.is_err());
-//     }
+        let result = mock_db
+            .soft_delete("soft_delete_id".to_string(), "user_123".to_string())
+            .await;
+        match result {
+            OperationResult::Success(Some(item)) => {
+                assert_eq!(item.deleted_by, Some("user_123".to_string()))
+            }
+            _ => panic!("Expected Success with item"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_scan_items_empty() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+    #[tokio::test]
+    async fn test_scan_items_empty() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         mock_db.expect_scan().returning(move || Ok(vec![]));
+        mock_db
+            .expect_scan()
+            .returning(|| OperationResult::Success(Some(vec![])));
 
-//         let result = mock_db.scan().await.unwrap();
-//         assert_eq!(result.len(), 0);
-//     }
+        let result = mock_db.scan().await;
+        match result {
+            OperationResult::Success(Some(items)) => assert!(items.is_empty()),
+            _ => panic!("Expected Success with empty items"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_get_deleted_items_by_user_empty() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+    #[tokio::test]
+    async fn test_get_deleted_items_by_user_empty() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         mock_db
-//             .expect_get_deleted_items_by_user()
-//             .with(eq("non_deleting_user"))
-//             .returning(move |_| Ok(vec![]));
+        mock_db
+            .expect_get_deleted_items_by_user()
+            .with(eq("user_456".to_string()))
+            .returning(|_| OperationResult::Success(Some(vec![])));
 
-//         let result = mock_db
-//             .get_deleted_items_by_user("non_deleting_user")
-//             .await
-//             .unwrap();
-//         assert_eq!(result.len(), 0);
-//     }
+        let result = mock_db
+            .get_deleted_items_by_user("user_456".to_string())
+            .await;
+        match result {
+            OperationResult::Success(Some(items)) => assert!(items.is_empty()),
+            _ => panic!("Expected Success with empty items"),
+        }
+    }
 
-//     #[tokio::test]
-//     async fn test_get_deleted_items_empty() {
-//         let mut mock_db = MockDynamoDbTestItem::new();
+    #[tokio::test]
+    async fn test_get_deleted_items_empty() {
+        let mut mock_db = MockDynamoDbTestItem::new();
 
-//         mock_db
-//             .expect_get_deleted_items()
-//             .returning(move || Ok(vec![]));
+        mock_db
+            .expect_get_deleted_items()
+            .returning(|| OperationResult::Success(Some(vec![])));
 
-//         let result = mock_db.get_deleted_items().await.unwrap();
-//         assert_eq!(result.len(), 0);
-//     }
-// }
+        let result = mock_db.get_deleted_items().await;
+        match result {
+            OperationResult::Success(Some(items)) => assert!(items.is_empty()),
+            _ => panic!("Expected Success with empty items"),
+        }
+    }
+}

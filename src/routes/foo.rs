@@ -5,13 +5,15 @@ use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::{extract::Path, Json};
 use reqwest::StatusCode;
-use serde_json::{json, Value};
+use serde_json::json;
 use uuid::Uuid;
 
-pub async fn get(Extension(db): Extension<DynamoDbRepository<Item>>) -> Json<Value> {
+pub async fn get(Extension(db): Extension<DynamoDbRepository<Item>>) -> Response {
     match db.scan().await {
-        Ok(items) => Json(json!({ "items": items })),
-        Err(e) => Json(json!({ "error": e.to_string() })),
+        OperationResult::Success(data) => {
+            (StatusCode::OK, Json(json!({"items": data}))).into_response()
+        }
+        err => err.into_response(),
     }
 }
 
@@ -82,15 +84,22 @@ pub async fn delete(
     Extension(db): Extension<DynamoDbRepository<Item>>,
     Path(id): Path<String>,
     claims: Option<Extension<Claims>>,
-) -> Json<Value> {
+) -> Response {
     match claims {
-        Some(claims) => match db.soft_delete(&id, &claims.username).await {
-            Ok(()) => Json(json!({ "message": "Item deleted successfully" })),
-            Err(e) => Json(json!({ "error": e.to_string() })),
+        Some(claims) => match db.soft_delete(id, claims.username.clone()).await {
+            OperationResult::Success(_) => (
+                StatusCode::OK,
+                Json(json!({"message": "Item was successfully removed"})),
+            )
+                .into_response(),
+            err => err.into_response(),
         },
-        None => Json(json!({
-            "message": "You are not authenticated",
-            "public_info": "This is publicly available information"
-        })),
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "message": "You are not authenticated",
+            })),
+        )
+            .into_response(),
     }
 }

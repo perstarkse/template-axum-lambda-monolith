@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::SoftDeletable;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone, Deserialize)]
 pub struct Item {
     pub id: String,
     pub name: String,
