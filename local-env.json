@@ -1,11 +1,11 @@
 {
   "TemplateApiFunction": {
     "ENVIRONMENT": "development",
-    "TEST_TABLE_NAME": "template-api-TemplateTable-U0V6TTIAXNTT",
+    "TEST_TABLE_NAME": "template-table",
     "AWS_REGION": "eu-north-1",
-    "COGNITO_REGION": "eu-north-1",
-    "COGNITO_USER_POOL_ID": "eu-north-1_yt3XvQhaQ",
-    "COGNITO_CLIENT_ID": "7s9utfvg4pqhkmb99t5pgcbbi7"
+    "AUTH_METHOD": "SECRET",
+    "SECRET": "GREAT_SECRET",
+    "SESSION_TABLE_NAME" : "session-table"  
   }
 }
 

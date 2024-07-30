@@ -44,6 +44,8 @@ Resources:
           ENVIRONMENT: production
           TEST_TABLE_NAME: !Ref TemplateTable
           SESSION_TABLE_NAME: !Ref SessionTable
+          AUTH_METHOD: SECRET
+          SECRET: Secret
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TemplateTable

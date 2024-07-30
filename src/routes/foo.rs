@@ -1,4 +1,3 @@
-use crate::auth::cognito_auth::Claims;
 use crate::db::{DynamoDbOperations, DynamoDbRepository, OperationResult};
 use crate::models::item::{CreateItem, Item};
 use axum::response::{IntoResponse, Response};

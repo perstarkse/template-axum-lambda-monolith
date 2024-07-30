@@ -29,7 +29,7 @@ async fn create_app(config: Config) -> Router {
                     "/foo/:id",
                     get(foo::get_by_id).post(foo::update).delete(foo::delete),
                 )
-                .layer(from_fn_with_state(auth.clone(), secret_middleware))
+                .route_layer(from_fn_with_state(auth.clone(), secret_middleware))
                 .layer(Extension(db))
         }
     }
