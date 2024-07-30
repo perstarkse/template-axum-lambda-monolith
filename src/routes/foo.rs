@@ -1,4 +1,4 @@
-use crate::auth::Claims;
+use crate::auth::cognito_auth::Claims;
 use crate::db::{DynamoDbOperations, DynamoDbRepository, OperationResult};
 use crate::models::item::{CreateItem, Item};
 use axum::response::{IntoResponse, Response};
@@ -83,23 +83,13 @@ pub async fn update(
 pub async fn delete(
     Extension(db): Extension<DynamoDbRepository<Item>>,
     Path(id): Path<String>,
-    claims: Option<Extension<Claims>>,
 ) -> Response {
-    match claims {
-        Some(claims) => match db.soft_delete(id, claims.username.clone()).await {
-            OperationResult::Success(_) => (
-                StatusCode::NO_CONTENT,
-                Json(json!({"message": "Item was successfully removed"})),
-            )
-                .into_response(),
-            err => err.into_response(),
-        },
-        None => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({
-                "message": "You are not authenticated",
-            })),
+    match db.soft_delete(id, "todo!".to_string()).await {
+        OperationResult::Success(_) => (
+            StatusCode::NO_CONTENT,
+            Json(json!({"message": "Item was successfully removed"})),
         )
             .into_response(),
+        err => err.into_response(),
     }
 }

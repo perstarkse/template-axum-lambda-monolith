@@ -11,6 +11,33 @@ Globals:
     MemorySize: 128
 
 Resources:
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: TemplateUserPool
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: TemplateUserPoolClient
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
+
   HttpApi:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -43,6 +70,9 @@ Resources:
         Variables:
           ENVIRONMENT: production
           TEST_TABLE_NAME: !Ref TemplateTable
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_CLIENT_ID: !Ref CognitoUserPoolClient
+          COGNITO_REGION: !Ref AWS::Region
           SESSION_TABLE_NAME: !Ref SessionTable
       Policies:
         - DynamoDBCrudPolicy:
@@ -63,7 +93,7 @@ Resources:
   SessionTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: lucia-sessions-table
+      TableName: lucia-sessions
       AttributeDefinitions:
         - AttributeName: id
           AttributeType: S
@@ -105,6 +135,12 @@ Outputs:
   TemplateTableName:
     Description: "Name of the DynamoDB table"
     Value: !Ref TemplateTable
+  CognitoUserPoolId:
+    Description: "Cognito User Pool ID"
+    Value: !Ref CognitoUserPool
+  CognitoUserPoolClientId:
+    Description: "Cognito User Pool Client ID"
+    Value: !Ref CognitoUserPoolClient
   SessionTableName:
     Description: "Name of the DynamoDB Sessions table"
     Value: !Ref SessionTable

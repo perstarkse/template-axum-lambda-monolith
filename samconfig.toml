@@ -19,10 +19,11 @@ lint = true
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 resolve_s3 = true
-s3_prefix = "template-api"
+s3_prefix = "template-api-auth"
 region = "eu-north-1"
 image_repositories = []
 disable_rollback = true
+stack_name = "template-api-auth"
 
 [default.package.parameters]
 resolve_s3 = true
