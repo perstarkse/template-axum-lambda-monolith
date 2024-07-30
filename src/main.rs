@@ -2,7 +2,7 @@ use axum::{middleware::from_fn_with_state, routing::get, Extension, Router};
 use lambda_http::{run, Error};
 
 use template::{
-    auth::secret_auth::{secret_middleware, SecretAuth},
+    auth::secret_auth_middleware::{secret_middleware, SecretAuth},
     config::{AuthMethod, Config},
     db::DynamoDbRepository,
     logging,
