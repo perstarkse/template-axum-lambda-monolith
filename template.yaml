@@ -43,7 +43,6 @@ Resources:
         Variables:
           ENVIRONMENT: production
           TEST_TABLE_NAME: !Ref TemplateTable
-          SESSION_TABLE_NAME: !Ref SessionTable
           AUTH_METHOD: SECRET
           SECRET: Secret
       Policies:
@@ -71,8 +70,6 @@ Resources:
           AttributeType: S
         - AttributeName: userId
           AttributeType: S
-        - AttributeName: github_id
-          AttributeType: S
       KeySchema:
         - AttributeName: id
           KeyType: HASH
@@ -87,12 +84,50 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
-        - IndexName: lucia-sessions-github-id-index
+  OauthAccountTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lucia-oauth-accounts-table
+      AttributeDefinitions:
+        - AttributeName: provider_id
+          AttributeType: S
+        - AttributeName: provider_user_id
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: provider_id
+          KeyType: HASH
+        - AttributeName: provider_user_id
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: lucia-oauth-user-index
           KeySchema:
-            - AttributeName: github_id
+            - AttributeName: id
               KeyType: HASH
           Projection:
             ProjectionType: ALL
+  UserTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lucia-user-table
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: lucia-user-email-index
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      BillingMode: PAY_PER_REQUEST
 
 Outputs:
   TemplateApi:
@@ -110,3 +145,6 @@ Outputs:
   SessionTableName:
     Description: "Name of the DynamoDB Sessions table"
     Value: !Ref SessionTable
+  OauthAccountTable:
+    Description: "Name of the DynamoDB OAuthAccounts table"
+    Value: !Ref OauthAccountTable
