@@ -5,7 +5,8 @@
     "AWS_REGION": "eu-north-1",
     "AUTH_METHOD": "SECRET",
     "SECRET": "GREAT_SECRET",
-    "SESSION_TABLE_NAME" : "session-table"  
+    "SESSION_TABLE_NAME" : "session-table",  
+    "USER_TABLE_NAME": "lucia-user-table"
   }
 }
 

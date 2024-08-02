@@ -43,11 +43,13 @@ Resources:
         Variables:
           ENVIRONMENT: production
           TEST_TABLE_NAME: !Ref TemplateTable
+          USER_TABLE_NAME: !Ref UserTable
           AUTH_METHOD: SECRET
           SECRET: Secret
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TemplateTable
+            TableName: !Ref UserTable
 
   TemplateTable:
     Type: AWS::DynamoDB::Table
@@ -148,3 +150,6 @@ Outputs:
   OauthAccountTable:
     Description: "Name of the DynamoDB OAuthAccounts table"
     Value: !Ref OauthAccountTable
+  UserTable:
+    Description: "Name of the DynamoDB Users table"
+    Value: !Ref UserTable

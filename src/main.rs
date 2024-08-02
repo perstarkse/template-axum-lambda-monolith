@@ -7,6 +7,7 @@ use template::{
     db::DynamoDbRepository,
     logging,
     models::item::Item,
+    models::user::User,
     routes::{foo, parameters},
 };
 
@@ -18,9 +19,13 @@ async fn create_app(config: Config) -> Router {
         AuthMethod::Secret => {
             let auth = SecretAuth::new(config.secret.unwrap());
 
+            let user_db = DynamoDbRepository::<User>::new(config.dynamodb_user_table_name.unwrap())
+                .await
+                .expect("Failed to initialize DynamoDB client for user table");
+
             let db = DynamoDbRepository::<Item>::new(config.dynamodb_table_name)
                 .await
-                .expect("Failed to initialize DynamoDB client");
+                .expect("Failed to initialize DynamoDB client for item table");
 
             Router::new()
                 .route("/parameters", get(parameters::handler))
@@ -31,6 +36,7 @@ async fn create_app(config: Config) -> Router {
                 )
                 .route_layer(from_fn_with_state(auth.clone(), secret_middleware))
                 .layer(Extension(db))
+                .layer(Extension(user_db))
         }
     }
 }

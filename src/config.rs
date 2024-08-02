@@ -8,6 +8,7 @@ pub enum AuthMethod {
 pub struct Config {
     pub aws_region: String,
     pub dynamodb_table_name: String,
+    pub dynamodb_user_table_name: Option<String>,
     pub auth_method: AuthMethod,
     pub cognito_region: Option<String>,
     pub cognito_user_pool_id: Option<String>,
@@ -29,6 +30,7 @@ impl Config {
                 aws_region: env::var("AWS_REGION").expect("AWS_REGION must be set"),
                 dynamodb_table_name: env::var("TEST_TABLE_NAME")
                     .expect("TEST_TABLE_NAME must be set"),
+                dynamodb_user_table_name: None,
                 auth_method,
                 cognito_region: Some(
                     env::var("COGNITO_REGION").expect("COGNITO_REGION must be set"),
@@ -45,6 +47,9 @@ impl Config {
                 aws_region: env::var("AWS_REGION").expect("AWS_REGION must be set"),
                 dynamodb_table_name: env::var("TEST_TABLE_NAME")
                     .expect("TEST_TABLE_NAME must be set"),
+                dynamodb_user_table_name: Some(
+                    env::var("USER_TABLE_NAME").expect("USER_TABLE_NAME must be set"),
+                ),
                 auth_method,
                 cognito_region: None,
                 cognito_user_pool_id: None,

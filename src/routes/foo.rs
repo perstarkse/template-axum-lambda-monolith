@@ -1,5 +1,6 @@
 use crate::db::{DynamoDbOperations, DynamoDbRepository, OperationResult};
 use crate::models::item::{CreateItem, Item};
+use crate::models::user::User;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::{extract::Path, Json};
@@ -7,7 +8,7 @@ use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
-pub async fn get(Extension(db): Extension<DynamoDbRepository<Item>>) -> Response {
+pub async fn get(Extension(db): Extension<DynamoDbRepository<User>>) -> Response {
     match db.scan().await {
         OperationResult::Success(data) => {
             (StatusCode::OK, Json(json!({"items": data}))).into_response()
