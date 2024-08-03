@@ -1,4 +1,8 @@
-use axum::{middleware::from_fn_with_state, routing::get, Extension, Router};
+use axum::{
+    middleware::from_fn_with_state,
+    routing::{delete, get, patch},
+    Extension, Router,
+};
 use lambda_http::{run, Error};
 
 use template::{
@@ -6,9 +10,8 @@ use template::{
     config::{AuthMethod, Config},
     db::DynamoDbRepository,
     logging,
-    models::item::Item,
-    models::user::User,
-    routes::{foo, parameters},
+    models::{item::Item, user::User},
+    routes::{foo, parameters, user},
 };
 
 async fn create_app(config: Config) -> Router {
@@ -30,10 +33,13 @@ async fn create_app(config: Config) -> Router {
             Router::new()
                 .route("/parameters", get(parameters::handler))
                 .route("/foo", get(foo::get).post(foo::create))
+                .route("/user", get(user::get))
+                .route("/user/:id", delete(user::delete))
                 .route(
                     "/foo/:id",
                     get(foo::get_by_id).post(foo::update).delete(foo::delete),
                 )
+                .route("/user/:id/admin-status", patch(user::patch_admin_status))
                 .route_layer(from_fn_with_state(auth.clone(), secret_middleware))
                 .layer(Extension(db))
                 .layer(Extension(user_db))
