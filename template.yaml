@@ -45,10 +45,11 @@ Resources:
           TEST_TABLE_NAME: !Ref TemplateTable
           USER_TABLE_NAME: !Ref UserTable
           AUTH_METHOD: SECRET
-          SECRET: Secret
+          SECRET: Secret0190192091
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref TemplateTable
+        - DynamoDBCrudPolicy:
             TableName: !Ref UserTable
 
   TemplateTable:
@@ -130,6 +131,29 @@ Resources:
           Projection:
             ProjectionType: ALL
       BillingMode: PAY_PER_REQUEST
+  EmailVerificationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lucia-email-verification-table
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+  PasswordResetTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lucia-email-password-reset-table
+      AttributeDefinitions:
+        - AttributeName: token_hash
+          AttributeType: S
+      KeySchema:
+        - AttributeName: token_hash
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
 
 Outputs:
   TemplateApi:
@@ -153,3 +177,9 @@ Outputs:
   UserTable:
     Description: "Name of the DynamoDB Users table"
     Value: !Ref UserTable
+  EmailVerificationTable:
+    Description: "Name of the DynamoDB email verification table"
+    Value: !Ref EmailVerificationTable
+  PasswordResetTable:
+    Description: "Name of the DynamoDB password reset table"
+    Value: !Ref PasswordResetTable

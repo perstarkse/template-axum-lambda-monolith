@@ -5,26 +5,6 @@ Here are some suggestions to improve the template and areas that need revision:
    - Consider renaming the `rust_app` directory to something more specific like `src` or `api`.
    - Move the `Cargo.toml`, `Cargo.lock`, and other Rust-specific files to the root of the project.
 
-1. Configuration:
-
-   - In `config.rs`, use a library like `dotenv` to load environment variables from a `.env` file for local development.
-   - Consider using a configuration management library like `config-rs` for more flexible configuration options.
-
-1. Error handling:
-
-   - Expand the `AppError` enum in `error.rs` to include more specific error types, such as `DbError`, `AuthError`, etc.
-   - Implement proper error handling and propagation throughout the application.
-
-1. Database:
-
-   - In `db.rs`, consider using a connection pool for better performance and resource management.
-   - Implement pagination for the `scan` operation to handle large datasets efficiently.
-
-1. Authentication:
-
-   - In `auth.rs`, implement token caching to reduce the number of verification requests.
-   - Add refresh token functionality for better user experience.
-
 1. API documentation:
 
    - Add OpenAPI/Swagger documentation using libraries like `utoipa` or `paperclip`.
