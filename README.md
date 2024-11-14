@@ -2,7 +2,7 @@
 
 ### Overview
 
-This project is a serverless API built with Rust and Axum, deployed as a single Lambda function behind an API Gateway with proxy integration. It uses AWS Cognito for authentication, with middleware handling auth logic.
+This project is a serverless API built with Rust and Axum, deployed as a single Lambda function behind an API Gateway with proxy integration. It uses AWS Cognito or API for authentication, with middleware handling auth logic.
 
 ### Features
 
@@ -26,13 +26,13 @@ To run the API locally, you'll need to set the required environment variables. O
 
 ### Design Notes
 
-This project is designed as a monolith to facilitate easy transition to alternative hosting solutions. Rust's performance capabilities make this design choice suitable for now. If the application grows significantly, reassessing this architecture may be necessary.
+This project is designed as a monolith to facilitate easy transition to alternative hosting solutions. Rust's performance capabilities make this design choice suitable for now. If the application grows significantly, reassessing this architecture may be necessary. 
+A project built on this serving around 20 endpoints fits nicely in a 128B lambda. Has a cold start of about 150ms. 
 
 ### Architecture
 
 The API is deployed with the following AWS resources:
 
-- AWS Cognito User Pool and Client
 - API Gateway with proxy integration
 - Lambda function with Rust runtime
 - DynamoDB table for data storage
